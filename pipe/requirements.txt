@@ -1,0 +1,24 @@
+# requirements.txt
+# Lists all Python packages needed for the project.
+
+# For connecting to the ClickHouse database
+clickhouse-driver
+
+# For producing messages to Kafka
+kafka-python
+
+# For WebSocket client connections
+websockets
+
+# For loading environment variables (optional, for local development)
+python-dotenv
+
+# For making HTTP requests to the MEXC REST API
+requests
+
+# For pretty-printing data in verification script
+pandas
+
+# For Parquet file format support in export/import operations
+pyarrow
+

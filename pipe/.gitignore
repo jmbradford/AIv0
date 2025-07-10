@@ -1,0 +1,34 @@
+# IDE and editor specific files
+.idea/
+.vscode/
+.cursor/
+.claude/
+
+# Python virtual environment
+venv/
+/venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+.env.*
+
+# Local data directories
+clickhouse_data/ 
+chdb/ 
+
+# Log files
+logs/ 
+*.log
+resource_baseline.log
+resource_baseline_summary.json
+client_output.log
+
+# Temporary files
+*.tmp
+*.temp
