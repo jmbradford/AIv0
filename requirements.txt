@@ -1,4 +1,3 @@
-# requirements_optimized.txt
 # Minimal dependencies for real-time ClickHouse ingestion
 
 # For connecting to ClickHouse database
@@ -12,8 +11,3 @@ requests
 
 # For environment variables (lightweight)
 python-dotenv
-
-# Removed heavy dependencies:
-# - kafka-python (replaced with direct HTTP)
-# - pandas (replaced with native clickhouse-driver for verification)  
-# - pyarrow (only used for unused export functionality)

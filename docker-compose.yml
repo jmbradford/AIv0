@@ -1,20 +1,19 @@
-# docker-compose-optimized.yml
-# Minimal ClickHouse-only setup for optimized real-time ingestion pipeline
-# Eliminates Kafka/Zookeeper stack for 70% memory reduction
+# docker-compose.yml
+# ClickHouse setup for MEXC data pipeline
+# Direct WebSocket to database ingestion
 
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
-    container_name: clickhouse-optimized
+    container_name: clickhouse
     ports:
       - "8123:8123"
       - "9000:9000"
     volumes:
-      - ch_data_optimized:/var/lib/clickhouse
+      - clickhouse_data:/var/lib/clickhouse
     environment:
-      - CLICKHOUSE_USER=user
-      - CLICKHOUSE_PASSWORD=password
       - CLICKHOUSE_DB=mexc_data
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     ulimits:
       nproc: 65535
       nofile:
@@ -25,7 +24,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
-  ch_data_optimized:
+  clickhouse_data:

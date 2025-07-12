@@ -42,8 +42,8 @@ TOPICS = {
 CLICKHOUSE_HOST = 'localhost'
 CLICKHOUSE_PORT = 9000
 CLICKHOUSE_DB = 'mexc_data'
-CLICKHOUSE_USER = 'user'
-CLICKHOUSE_PASSWORD = 'password'
+CLICKHOUSE_USER = 'default'
+CLICKHOUSE_PASSWORD = ''
 
 # -- Data Subscription Details
 # Defines the WebSocket subscription channels and parameters.
