@@ -205,15 +205,15 @@ class ClickHouseClient:
                 # Fallback timestamp
                 ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
             
-            # Extract and structure data based on message type with typed columns
+            # Extract and structure data based on message type with multi-line format
             if message_type == "deal":
-                return self._extract_deal_data_typed(data, ts)
+                return self._extract_deal_data_multiline(data, ts)
             elif message_type == "kline":
-                return self._extract_kline_data_typed(data, ts)
+                return self._extract_kline_data_multiline(data, ts)
             elif message_type == "ticker":
-                return self._extract_ticker_data_typed(data, ts)
+                return self._extract_ticker_data_multiline(data, ts)
             elif message_type == "depth":
-                return self._extract_depth_data_typed(data, ts)
+                return self._extract_depth_data_multiline(data, ts)
             
             return None
                 
@@ -221,94 +221,136 @@ class ClickHouseClient:
             logging.error(f"Data extraction error for {message_type}: {e}, data: {data}")
             return None
     
-    def _extract_deal_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
-        """Extract deal fields into typed columns for mexc_deal table."""
-        return {
-            'ts': ts,
-            'symbol': data.get('symbol'),
-            'price': float(data['data'].get('p', 0)),
-            'volume': float(data['data'].get('v', 0)),
-            'side': 'buy' if data['data'].get('T') == 1 else 'sell',
-            'tradeType': int(data['data'].get('T', 0)),
-            'orderType': int(data['data'].get('O', 0)),
-            'matchType': int(data['data'].get('M', 0)),
-            'tradeTime': int(data['data'].get('t', 0))
-        }
-    
-    def _extract_kline_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
-        """Extract kline fields into typed columns for mexc_kline table."""
-        return {
-            'ts': ts,
-            'symbol': data.get('symbol'),
-            'interval': data['data'].get('interval'),
-            'startTime': int(data['data'].get('t', 0)),
-            'open': float(data['data'].get('o', 0)),
-            'close': float(data['data'].get('c', 0)),
-            'high': float(data['data'].get('h', 0)),
-            'low': float(data['data'].get('l', 0)),
-            'amount': float(data['data'].get('a', 0)),
-            'quantity': int(data['data'].get('q', 0)),
-            'realOpen': float(data['data'].get('ro', 0)),
-            'realClose': float(data['data'].get('rc', 0)),
-            'realHigh': float(data['data'].get('rh', 0)),
-            'realLow': float(data['data'].get('rl', 0))
-        }
-    
-    def _extract_ticker_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
-        """Extract ticker fields into typed columns for mexc_ticker table."""
-        return {
-            'ts': ts,
-            'symbol': data.get('symbol'),
-            'lastPrice': float(data['data'].get('lastPrice', 0)),
-            'riseFallRate': float(data['data'].get('riseFallRate', 0)),
-            'riseFallValue': float(data['data'].get('riseFallValue', 0)),
-            'fairPrice': float(data['data'].get('fairPrice', 0)),
-            'indexPrice': float(data['data'].get('indexPrice', 0)),
-            'volume24': int(data['data'].get('volume24', 0)),
-            'amount24': float(data['data'].get('amount24', 0)),
-            'high24Price': float(data['data'].get('high24Price', 0)),
-            'lower24Price': float(data['data'].get('lower24Price', 0)),
-            'maxBidPrice': float(data['data'].get('maxBidPrice', 0)),
-            'minAskPrice': float(data['data'].get('minAskPrice', 0)),
-            'fundingRate': float(data['data'].get('fundingRate', 0)),
-            'bid1': float(data['data'].get('bid1', 0)),
-            'ask1': float(data['data'].get('ask1', 0)),
-            'holdVol': int(data['data'].get('holdVol', 0)),
-            'timestamp': int(data['data'].get('timestamp', 0)),
-            'zone': data['data'].get('zone', 'UTC+8'),
-            'riseFallRates': data['data'].get('riseFallRates', []),
-            'riseFallRatesOfTimezone': data['data'].get('riseFallRatesOfTimezone', [])
-        }
-    
-    def _extract_depth_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
-        """Extract depth fields into typed columns for mexc_depth table."""
-        depth_info = data['data']
+    def _extract_deal_data_multiline(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract deal fields into multi-line string format for mexc_data table."""
+        deal_data = []
+        deal_data.append(f"symbol={data.get('symbol', '')}")
+        deal_data.append(f"price={float(data['data'].get('p', 0))}")
+        deal_data.append(f"volume={float(data['data'].get('v', 0))}")
+        deal_data.append(f"side={'buy' if data['data'].get('T') == 1 else 'sell'}")
+        deal_data.append(f"tradeType={int(data['data'].get('T', 0))}")
+        deal_data.append(f"orderType={int(data['data'].get('O', 0))}")
+        deal_data.append(f"matchType={int(data['data'].get('M', 0))}")
+        deal_data.append(f"tradeTime={int(data['data'].get('t', 0))}")
         
-        # Extract best bid/ask from arrays
+        return {
+            'ts': ts,
+            'ticker': '',
+            'kline': '',
+            'deal': '\n'.join(deal_data),
+            'depth': '',
+            'dl': ''
+        }
+    
+    def _extract_kline_data_multiline(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract kline fields into multi-line string format for mexc_data table."""
+        kline_data = []
+        kline_data.append(f"symbol={data.get('symbol', '')}")
+        kline_data.append(f"interval={data['data'].get('interval', '')}")
+        kline_data.append(f"startTime={int(data['data'].get('t', 0))}")
+        kline_data.append(f"open={float(data['data'].get('o', 0))}")
+        kline_data.append(f"close={float(data['data'].get('c', 0))}")
+        kline_data.append(f"high={float(data['data'].get('h', 0))}")
+        kline_data.append(f"low={float(data['data'].get('l', 0))}")
+        kline_data.append(f"amount={float(data['data'].get('a', 0))}")
+        kline_data.append(f"quantity={int(data['data'].get('q', 0))}")
+        kline_data.append(f"realOpen={float(data['data'].get('ro', 0))}")
+        kline_data.append(f"realClose={float(data['data'].get('rc', 0))}")
+        kline_data.append(f"realHigh={float(data['data'].get('rh', 0))}")
+        kline_data.append(f"realLow={float(data['data'].get('rl', 0))}")
+        
+        return {
+            'ts': ts,
+            'ticker': '',
+            'kline': '\n'.join(kline_data),
+            'deal': '',
+            'depth': '',
+            'dl': ''
+        }
+    
+    def _extract_ticker_data_multiline(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract ticker fields into multi-line string format for mexc_data table."""
+        ticker_data = []
+        ticker_data.append(f"symbol={data.get('symbol', '')}")
+        ticker_data.append(f"lastPrice={float(data['data'].get('lastPrice', 0))}")
+        ticker_data.append(f"riseFallRate={float(data['data'].get('riseFallRate', 0))}")
+        ticker_data.append(f"riseFallValue={float(data['data'].get('riseFallValue', 0))}")
+        ticker_data.append(f"fairPrice={float(data['data'].get('fairPrice', 0))}")
+        ticker_data.append(f"indexPrice={float(data['data'].get('indexPrice', 0))}")
+        ticker_data.append(f"volume24={int(data['data'].get('volume24', 0))}")
+        ticker_data.append(f"amount24={float(data['data'].get('amount24', 0))}")
+        ticker_data.append(f"high24Price={float(data['data'].get('high24Price', 0))}")
+        ticker_data.append(f"lower24Price={float(data['data'].get('lower24Price', 0))}")
+        ticker_data.append(f"maxBidPrice={float(data['data'].get('maxBidPrice', 0))}")
+        ticker_data.append(f"minAskPrice={float(data['data'].get('minAskPrice', 0))}")
+        ticker_data.append(f"fundingRate={float(data['data'].get('fundingRate', 0))}")
+        ticker_data.append(f"bid1={float(data['data'].get('bid1', 0))}")
+        ticker_data.append(f"ask1={float(data['data'].get('ask1', 0))}")
+        ticker_data.append(f"holdVol={int(data['data'].get('holdVol', 0))}")
+        ticker_data.append(f"timestamp={int(data['data'].get('timestamp', 0))}")
+        ticker_data.append(f"zone={data['data'].get('zone', 'UTC+8')}")
+        
+        # Handle arrays by converting to string representation
+        rise_fall_rates = data['data'].get('riseFallRates', [])
+        if rise_fall_rates:
+            ticker_data.append(f"riseFallRates={','.join(map(str, rise_fall_rates))}")
+        
+        rise_fall_rates_tz = data['data'].get('riseFallRatesOfTimezone', [])
+        if rise_fall_rates_tz:
+            ticker_data.append(f"riseFallRatesOfTimezone={','.join(map(str, rise_fall_rates_tz))}")
+        
+        return {
+            'ts': ts,
+            'ticker': '\n'.join(ticker_data),
+            'kline': '',
+            'deal': '',
+            'depth': '',
+            'dl': ''
+        }
+    
+    def _extract_depth_data_multiline(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract depth fields into multi-line string format for mexc_data table."""
+        depth_info = data['data']
+        depth_data = []
+        
+        depth_data.append(f"symbol={data.get('symbol', '')}")
+        depth_data.append(f"version={int(depth_info.get('version', 0))}")
+        depth_data.append(f"begin={int(depth_info.get('begin', 0))}")
+        depth_data.append(f"end={int(depth_info.get('end', 0))}")
+        
+        # Extract and format bid/ask arrays
         bids = depth_info.get('bids', [])
         asks = depth_info.get('asks', [])
         
-        best_bid_price = float(bids[0][0]) if bids else 0.0
-        best_bid_qty = int(bids[0][1]) if bids else 0
-        best_ask_price = float(asks[0][0]) if asks else 0.0
-        best_ask_qty = int(asks[0][1]) if asks else 0
+        if bids:
+            best_bid_price = float(bids[0][0]) if bids else 0.0
+            best_bid_qty = int(bids[0][1]) if bids else 0
+            depth_data.append(f"bestBidPrice={best_bid_price}")
+            depth_data.append(f"bestBidQty={best_bid_qty}")
+            depth_data.append(f"bidLevels={len(bids)}")
+            
+            # Convert bids array to string format
+            bids_str = '|'.join([f"{float(bid[0])},{int(bid[1])},{int(bid[2]) if len(bid) > 2 else 1}" for bid in bids])
+            depth_data.append(f"bids={bids_str}")
         
-        # Convert arrays to tuples for ClickHouse Array(Tuple()) storage
-        asks_tuples = [(float(ask[0]), int(ask[1]), int(ask[2]) if len(ask) > 2 else 1) for ask in asks]
-        bids_tuples = [(float(bid[0]), int(bid[1]), int(bid[2]) if len(bid) > 2 else 1) for bid in bids]
+        if asks:
+            best_ask_price = float(asks[0][0]) if asks else 0.0
+            best_ask_qty = int(asks[0][1]) if asks else 0
+            depth_data.append(f"bestAskPrice={best_ask_price}")
+            depth_data.append(f"bestAskQty={best_ask_qty}")
+            depth_data.append(f"askLevels={len(asks)}")
+            
+            # Convert asks array to string format
+            asks_str = '|'.join([f"{float(ask[0])},{int(ask[1])},{int(ask[2]) if len(ask) > 2 else 1}" for ask in asks])
+            depth_data.append(f"asks={asks_str}")
         
         return {
             'ts': ts,
-            'symbol': data.get('symbol'),
-            'version': int(depth_info.get('version', 0)),
-            'bestBidPrice': best_bid_price,
-            'bestBidQty': best_bid_qty,
-            'bestAskPrice': best_ask_price,
-            'bestAskQty': best_ask_qty,
-            'bidLevels': len(bids),
-            'askLevels': len(asks),
-            'asks': asks_tuples,
-            'bids': bids_tuples
+            'ticker': '',
+            'kline': '',
+            'deal': '',
+            'depth': '\n'.join(depth_data),
+            'dl': ''
         }
     
     def send_to_clickhouse(self, message_type: str, record: Dict[str, Any]) -> bool:
@@ -320,8 +362,8 @@ class ClickHouseClient:
         if self.clickhouse_state == ClickHouseState.DOWN:
             return self._buffer_record_for_recovery(message_type, record)
         
-        # Route to appropriate specialized table
-        table_name = f"mexc_{message_type}"
+        # Route to single optimized table
+        table_name = "mexc_data"
         success = self._send_to_clickhouse_direct(table_name, record)
         
         if success:
