@@ -64,7 +64,9 @@ class ClickHouseClient:
             'lost_records': 0
         }
         self.last_stats_time = time.time()
+        self.start_time = time.time()  # Track total runtime
         self.last_message_time = {}  # Track timing for real-time verification
+        self.insert_latencies = []  # Track ClickHouse insert latencies
         
         # Start background health monitoring
         self.health_monitor_thread = threading.Thread(target=self._health_monitor_loop, daemon=True)
@@ -174,7 +176,9 @@ class ClickHouseClient:
             # Attempt to flush collected records
             successful_flushes = 0
             for buffered_record in records_to_flush:
-                if self._send_to_clickhouse_direct("mexc_messages", buffered_record['record']):
+                message_type = buffered_record['message_type']
+                table_name = f"mexc_{message_type}"
+                if self._send_to_clickhouse_direct(table_name, buffered_record['record']):
                     successful_flushes += 1
                     self.stats['recovered_records'] += 1
                 else:
@@ -186,7 +190,7 @@ class ClickHouseClient:
                 logging.info(f"Recovered {successful_flushes} buffered records from emergency buffer")
     
     def extract_data_from_mexc_message(self, data: Dict[str, Any], message_type: str, raw_json: str) -> Optional[Dict[str, Any]]:
-        """Extract timestamp and parse all values from MEXC message into structured data."""
+        """Extract timestamp and parse all values from MEXC message into typed columns."""
         try:
             # Extract timestamp based on message type
             if message_type == "deal":
@@ -201,117 +205,114 @@ class ClickHouseClient:
                 # Fallback timestamp
                 ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
             
-            # Create record with timestamp and structured data
-            record = {
-                'ts': ts,
-                'ticker': None,
-                'kline': None, 
-                'deal': None,
-                'depth': None,
-                'dl': None
-            }
-            
-            # Extract and structure data based on message type
+            # Extract and structure data based on message type with typed columns
             if message_type == "deal":
-                record['deal'] = self._extract_deal_data(data)
+                return self._extract_deal_data_typed(data, ts)
             elif message_type == "kline":
-                record['kline'] = self._extract_kline_data(data)
+                return self._extract_kline_data_typed(data, ts)
             elif message_type == "ticker":
-                record['ticker'] = self._extract_ticker_data(data)
+                return self._extract_ticker_data_typed(data, ts)
             elif message_type == "depth":
-                record['depth'] = self._extract_depth_data(data)
+                return self._extract_depth_data_typed(data, ts)
             
-            return record
+            return None
                 
         except (KeyError, ValueError, TypeError) as e:
             logging.error(f"Data extraction error for {message_type}: {e}, data: {data}")
             return None
     
-    def _extract_deal_data(self, data: Dict[str, Any]) -> str:
-        """Extract all deal fields into structured JSON."""
-        deal_data = {
+    def _extract_deal_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract deal fields into typed columns for mexc_deal table."""
+        return {
+            'ts': ts,
             'symbol': data.get('symbol'),
-            'price': data['data'].get('p'),
-            'volume': data['data'].get('v'),
-            'side': 'buy' if data['data'].get('T') == 1 else 'sell',  # T=1 is buy, T=2 is sell
-            'tradeType': data['data'].get('T'),
-            'orderType': data['data'].get('O'),
-            'matchType': data['data'].get('M'),
-            'tradeTime': data['data'].get('t')  # Trade timestamp in milliseconds
+            'price': float(data['data'].get('p', 0)),
+            'volume': float(data['data'].get('v', 0)),
+            'side': 'buy' if data['data'].get('T') == 1 else 'sell',
+            'tradeType': int(data['data'].get('T', 0)),
+            'orderType': int(data['data'].get('O', 0)),
+            'matchType': int(data['data'].get('M', 0)),
+            'tradeTime': int(data['data'].get('t', 0))
         }
-        return json.dumps(deal_data, separators=(',', ':'))
     
-    def _extract_kline_data(self, data: Dict[str, Any]) -> str:
-        """Extract all kline fields into structured JSON."""
-        kline_data = {
+    def _extract_kline_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract kline fields into typed columns for mexc_kline table."""
+        return {
+            'ts': ts,
             'symbol': data.get('symbol'),
             'interval': data['data'].get('interval'),
-            'startTime': data['data'].get('t'),  # Kline start timestamp in seconds
-            'open': data['data'].get('o'),
-            'close': data['data'].get('c'),
-            'high': data['data'].get('h'),
-            'low': data['data'].get('l'),
-            'amount': data['data'].get('a'),
-            'quantity': data['data'].get('q'),
-            'realOpen': data['data'].get('ro'),
-            'realClose': data['data'].get('rc'),
-            'realHigh': data['data'].get('rh'),
-            'realLow': data['data'].get('rl')
+            'startTime': int(data['data'].get('t', 0)),
+            'open': float(data['data'].get('o', 0)),
+            'close': float(data['data'].get('c', 0)),
+            'high': float(data['data'].get('h', 0)),
+            'low': float(data['data'].get('l', 0)),
+            'amount': float(data['data'].get('a', 0)),
+            'quantity': int(data['data'].get('q', 0)),
+            'realOpen': float(data['data'].get('ro', 0)),
+            'realClose': float(data['data'].get('rc', 0)),
+            'realHigh': float(data['data'].get('rh', 0)),
+            'realLow': float(data['data'].get('rl', 0))
         }
-        return json.dumps(kline_data, separators=(',', ':'))
     
-    def _extract_ticker_data(self, data: Dict[str, Any]) -> str:
-        """Extract all ticker fields into structured JSON based on actual MEXC format."""
-        ticker_data = {
+    def _extract_ticker_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract ticker fields into typed columns for mexc_ticker table."""
+        return {
+            'ts': ts,
             'symbol': data.get('symbol'),
-            'lastPrice': data['data'].get('lastPrice'),
-            'riseFallRate': data['data'].get('riseFallRate'),
-            'riseFallValue': data['data'].get('riseFallValue'),
-            'fairPrice': data['data'].get('fairPrice'),
-            'indexPrice': data['data'].get('indexPrice'),
-            'volume24': data['data'].get('volume24'),
-            'amount24': data['data'].get('amount24'),
-            'high24Price': data['data'].get('high24Price'),
-            'lower24Price': data['data'].get('lower24Price'),
-            'maxBidPrice': data['data'].get('maxBidPrice'),
-            'minAskPrice': data['data'].get('minAskPrice'),
-            'fundingRate': data['data'].get('fundingRate'),
-            'bid1': data['data'].get('bid1'),
-            'ask1': data['data'].get('ask1'),
-            'holdVol': data['data'].get('holdVol'),
-            'timestamp': data['data'].get('timestamp'),
-            'zone': data['data'].get('zone'),
-            'riseFallRates': data['data'].get('riseFallRates'),
-            'riseFallRatesOfTimezone': data['data'].get('riseFallRatesOfTimezone')
+            'lastPrice': float(data['data'].get('lastPrice', 0)),
+            'riseFallRate': float(data['data'].get('riseFallRate', 0)),
+            'riseFallValue': float(data['data'].get('riseFallValue', 0)),
+            'fairPrice': float(data['data'].get('fairPrice', 0)),
+            'indexPrice': float(data['data'].get('indexPrice', 0)),
+            'volume24': int(data['data'].get('volume24', 0)),
+            'amount24': float(data['data'].get('amount24', 0)),
+            'high24Price': float(data['data'].get('high24Price', 0)),
+            'lower24Price': float(data['data'].get('lower24Price', 0)),
+            'maxBidPrice': float(data['data'].get('maxBidPrice', 0)),
+            'minAskPrice': float(data['data'].get('minAskPrice', 0)),
+            'fundingRate': float(data['data'].get('fundingRate', 0)),
+            'bid1': float(data['data'].get('bid1', 0)),
+            'ask1': float(data['data'].get('ask1', 0)),
+            'holdVol': int(data['data'].get('holdVol', 0)),
+            'timestamp': int(data['data'].get('timestamp', 0)),
+            'zone': data['data'].get('zone', 'UTC+8'),
+            'riseFallRates': data['data'].get('riseFallRates', []),
+            'riseFallRatesOfTimezone': data['data'].get('riseFallRatesOfTimezone', [])
         }
-        return json.dumps(ticker_data, separators=(',', ':'))
     
-    def _extract_depth_data(self, data: Dict[str, Any]) -> str:
-        """Extract all depth fields into structured JSON."""
+    def _extract_depth_data_typed(self, data: Dict[str, Any], ts: str) -> Dict[str, Any]:
+        """Extract depth fields into typed columns for mexc_depth table."""
         depth_info = data['data']
         
         # Extract best bid/ask from arrays
-        best_bid_price = depth_info['bids'][0][0] if depth_info.get('bids') else None
-        best_bid_qty = depth_info['bids'][0][1] if depth_info.get('bids') else None
-        best_ask_price = depth_info['asks'][0][0] if depth_info.get('asks') else None
-        best_ask_qty = depth_info['asks'][0][1] if depth_info.get('asks') else None
+        bids = depth_info.get('bids', [])
+        asks = depth_info.get('asks', [])
         
-        depth_data = {
+        best_bid_price = float(bids[0][0]) if bids else 0.0
+        best_bid_qty = int(bids[0][1]) if bids else 0
+        best_ask_price = float(asks[0][0]) if asks else 0.0
+        best_ask_qty = int(asks[0][1]) if asks else 0
+        
+        # Convert arrays to tuples for ClickHouse Array(Tuple()) storage
+        asks_tuples = [(float(ask[0]), int(ask[1]), int(ask[2]) if len(ask) > 2 else 1) for ask in asks]
+        bids_tuples = [(float(bid[0]), int(bid[1]), int(bid[2]) if len(bid) > 2 else 1) for bid in bids]
+        
+        return {
+            'ts': ts,
             'symbol': data.get('symbol'),
-            'version': depth_info.get('version'),
+            'version': int(depth_info.get('version', 0)),
             'bestBidPrice': best_bid_price,
             'bestBidQty': best_bid_qty,
             'bestAskPrice': best_ask_price,
             'bestAskQty': best_ask_qty,
-            'bidLevels': len(depth_info.get('bids', [])),
-            'askLevels': len(depth_info.get('asks', [])),
-            'asks': depth_info.get('asks', []),
-            'bids': depth_info.get('bids', [])
+            'bidLevels': len(bids),
+            'askLevels': len(asks),
+            'asks': asks_tuples,
+            'bids': bids_tuples
         }
-        return json.dumps(depth_data, separators=(',', ':'))
     
     def send_to_clickhouse(self, message_type: str, record: Dict[str, Any]) -> bool:
-        """Send a single record to ClickHouse mexc_messages table with fallback buffering."""
+        """Send a single record to ClickHouse specialized table with fallback buffering."""
         # Track message receive time for monitoring
         self.last_message_time[message_type] = time.time()
         
@@ -319,8 +320,9 @@ class ClickHouseClient:
         if self.clickhouse_state == ClickHouseState.DOWN:
             return self._buffer_record_for_recovery(message_type, record)
         
-        # Attempt direct insert to mexc_messages table
-        success = self._send_to_clickhouse_direct("mexc_messages", record)
+        # Route to appropriate specialized table
+        table_name = f"mexc_{message_type}"
+        success = self._send_to_clickhouse_direct(table_name, record)
         
         if success:
             self.last_successful_insert = time.time()
@@ -372,8 +374,11 @@ class ClickHouseClient:
                                 tuple_strings.append(f"({', '.join(tuple_values)})")
                             formatted_values.append(f"[{', '.join(tuple_strings)}]")
                         else:
-                            # Array of simple values
-                            array_values = [f"'{str(v)}'" for v in value]
+                            # Array of simple values - handle numeric arrays
+                            if all(isinstance(v, (int, float)) for v in value):
+                                array_values = [str(v) for v in value]
+                            else:
+                                array_values = [f"'{str(v)}'" for v in value]
                             formatted_values.append(f"[{', '.join(array_values)}]")
                     else:
                         formatted_values.append('[]')
@@ -387,24 +392,27 @@ class ClickHouseClient:
             # Build INSERT statement for immediate execution
             query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({', '.join(formatted_values)})"
             
-            # Send to ClickHouse with adaptive timeout
+            # Send to ClickHouse with adaptive timeout and latency tracking
             timeout = 0.5 if self.clickhouse_state == ClickHouseState.HEALTHY else 2
+            start_time = time.time()
             response = self.session.post(
                 self.clickhouse_url,
                 data=query,
                 timeout=timeout
             )
+            insert_latency = (time.time() - start_time) * 1000  # Convert to milliseconds
             
             if response.status_code == 200:
                 self.stats['total_inserts'] += 1
                 
-                # Log insert latency if high
-                message_types = list(self.last_message_time.keys())
-                if message_types:
-                    latest_message_type = max(message_types, key=lambda x: self.last_message_time[x])
-                    insert_latency = (time.time() - self.last_message_time[latest_message_type]) * 1000
-                    if insert_latency > 100:  # Log if insert takes >100ms
-                        logging.warning(f"High insert latency: {insert_latency:.1f}ms")
+                # Track insert latency for statistics (keep last 100 measurements)
+                self.insert_latencies.append(insert_latency)
+                if len(self.insert_latencies) > 100:
+                    self.insert_latencies.pop(0)
+                
+                # Log insert latency if unusually high
+                if insert_latency > 500:  # Log if insert takes >500ms
+                    logging.warning(f"High insert latency: {insert_latency:.1f}ms")
                 
                 return True
             else:
@@ -446,45 +454,35 @@ class ClickHouseClient:
             return False
     
     def log_error_to_dead_letter(self, message_type: str, raw_data: str, error_msg: str):
-        """Log failed records to both dead letter table and mexc_messages dl column."""
+        """Log failed records to dead letter table."""
         try:
-            # Log to traditional dead letter table
+            # Log to dead letter table
             escaped_raw = raw_data.replace("\\", "\\\\").replace("'", "\\'")
             escaped_error = error_msg.replace("\\", "\\\\").replace("'", "\\'")
             query = f"""INSERT INTO dead_letter (table_name, raw_data, error_message) 
                        VALUES ('{message_type}', '{escaped_raw}', '{escaped_error}')"""
             self.session.post(self.clickhouse_url, data=query, timeout=2)
             
-            # Also log to mexc_messages dl column with structured data
-            dl_data = {
-                'messageType': message_type,
-                'errorMessage': error_msg,
-                'originalData': raw_data[:1000],  # Limit size to prevent oversized records
-                'errorTime': datetime.now().isoformat()
-            }
-            dl_record = {
-                'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
-                'ticker': None,
-                'kline': None,
-                'deal': None,
-                'depth': None,
-                'dl': json.dumps(dl_data, separators=(',', ':'))
-            }
-            self._send_to_clickhouse_direct("mexc_messages", dl_record)
-            
         except Exception as e:
             logging.error(f"Failed to log to dead letter: {e}")
     
     def print_statistics(self):
-        """Print performance statistics with health monitoring."""
+        """Print performance statistics with reduced frequency and enhanced metrics."""
         current_time = time.time()
         elapsed = current_time - self.last_stats_time
         
-        if elapsed >= 30:  # Print stats every 30 seconds for real-time monitoring
+        if elapsed >= 60:  # Print stats every 60 seconds (reduced from 30)
             total_records = sum(self.stats[k] for k in ['deal', 'kline', 'ticker', 'depth'])
             rate = total_records / elapsed if elapsed > 0 else 0
             
-            # Calculate latencies and data freshness
+            # Calculate latency metrics
+            avg_latency = 0
+            max_latency = 0
+            if self.insert_latencies:
+                avg_latency = sum(self.insert_latencies) / len(self.insert_latencies)
+                max_latency = max(self.insert_latencies)
+            
+            # Calculate data freshness
             latency_info = ""
             max_age = 0
             for message_type in ['deal', 'kline', 'ticker', 'depth']:
@@ -508,15 +506,17 @@ class ClickHouseClient:
             elif max_age > 30:  # No data for over 30 seconds
                 data_flow_status = "SLOW_FLOW "
             
-            # Generate comprehensive status report
+            # Enhanced status report with new metrics
             buffer_info = f"Buffer: {len(self.emergency_buffer)}" if len(self.emergency_buffer) > 0 else ""
             recovery_info = f"Recovered: {self.stats['recovered_records']}, Lost: {self.stats['lost_records']}" if self.stats['recovered_records'] > 0 or self.stats['lost_records'] > 0 else ""
+            latency_info_display = f"Latency: avg={avg_latency:.1f}ms, max={max_latency:.1f}ms" if self.insert_latencies else ""
             
             logging.info(f"STATS {health_indicator} {data_flow_status}(last {elapsed:.0f}s): "
                         f"Rate: {rate:.1f} msg/sec, "
-                        f"Total: {self.stats['total_inserts']}, "
+                        f"Total: {self.stats['total_inserts']:,}, "
                         f"Failures: {self.consecutive_failures}, "
                         f"Errors: {self.stats['errors']} "
+                        f"{latency_info_display} "
                         f"{buffer_info} {recovery_info} "
                         f"Last msgs: {latency_info}")
             
@@ -525,11 +525,14 @@ class ClickHouseClient:
                 logging.error(f"CRITICAL: ClickHouse DOWN for {current_time - self.last_successful_insert:.0f}s! Buffer: {len(self.emergency_buffer)} records")
             elif len(self.emergency_buffer) > 5000:
                 logging.warning(f"WARNING: Emergency buffer growing large ({len(self.emergency_buffer)} records)")
+            elif avg_latency > 1000:  # Alert on high latency
+                logging.warning(f"WARNING: High insert latency detected - avg: {avg_latency:.1f}ms, max: {max_latency:.1f}ms")
             
             # Reset periodic stats but keep cumulative counters
             for key in ['deal', 'kline', 'ticker', 'depth', 'errors']:
                 self.stats[key] = 0
             self.last_stats_time = current_time
+            self.insert_latencies.clear()  # Reset latency tracking
 
 # Global client instance
 clickhouse_client = None
@@ -605,14 +608,15 @@ async def mexc_websocket_client():
                                 # Update statistics
                                 clickhouse_client.stats[message_type] += 1
                                 
-                                # Log high-frequency streams less verbosely
+                                # Much quieter logging - only debug level for successful inserts
                                 if message_type in ['deal', 'depth']:
-                                    if clickhouse_client.stats[message_type] % 25 == 0:  # Log every 25th for high-freq
+                                    if clickhouse_client.stats[message_type] % 100 == 0:  # Log every 100th for high-freq
                                         status_icon = "✓" if clickhouse_client.clickhouse_state == ClickHouseState.HEALTHY else "B"
-                                        logging.info(f"{status_icon} {message_type} #{clickhouse_client.stats[message_type]} → ClickHouse")
+                                        logging.debug(f"{status_icon} {message_type} #{clickhouse_client.stats[message_type]} → ClickHouse")
                                 else:
-                                    status_icon = "✓" if clickhouse_client.clickhouse_state == ClickHouseState.HEALTHY else "B"
-                                    logging.info(f"{status_icon} {message_type} → ClickHouse")
+                                    if clickhouse_client.stats[message_type] % 10 == 0:  # Log every 10th for ticker/kline
+                                        status_icon = "✓" if clickhouse_client.clickhouse_state == ClickHouseState.HEALTHY else "B"
+                                        logging.debug(f"{status_icon} {message_type} #{clickhouse_client.stats[message_type]} → ClickHouse")
                             else:
                                 clickhouse_client.stats['errors'] += 1
                                 # Note: buffering is handled inside send_to_clickhouse now

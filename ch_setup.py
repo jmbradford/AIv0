@@ -36,31 +36,103 @@ def create_database(client):
     logging.info(f"Switched to database '{config.CLICKHOUSE_DB}'.")
 
 def create_database_tables(client):
-    """Creates the main table with required schema: ts, ticker, kline, deal, depth, dl columns."""
+    """Creates optimized table schemas for maximum storage efficiency."""
     
-    # Single wide table with temporal sequencing design
-    # ts column always populated, data columns sparsely populated based on message type
-    # Each data column stores structured JSON with extracted values (no raw messages)
-    mexc_messages_schema = """
-    CREATE TABLE mexc_messages (
-        ts DateTime64(3, 'UTC'),        -- ALWAYS populated from message timestamp
-        ticker Nullable(String),        -- Structured JSON with all ticker fields, NULL otherwise  
-        kline Nullable(String),         -- Structured JSON with all kline fields, NULL otherwise
-        deal Nullable(String),          -- Structured JSON with all deal fields, NULL otherwise
-        depth Nullable(String),         -- Structured JSON with all depth fields, NULL otherwise
-        dl Nullable(String)             -- Structured JSON with error info, NULL otherwise
-    ) ENGINE = MergeTree()
+    # Specialized tables with typed columns for optimal compression and performance
+    
+    # Ticker table - Financial market data with appropriate numeric types
+    ticker_schema = """
+    CREATE TABLE mexc_ticker (
+        ts DateTime64(3, 'UTC'),
+        symbol LowCardinality(String),
+        lastPrice Float64,
+        riseFallRate Float32,
+        riseFallValue Float32,
+        fairPrice Float64,
+        indexPrice Float64,
+        volume24 UInt64,
+        amount24 Decimal64(8),
+        high24Price Float64,
+        lower24Price Float64,
+        maxBidPrice Float64,
+        minAskPrice Float64,
+        fundingRate Float64,
+        bid1 Float64,
+        ask1 Float64,
+        holdVol UInt64,
+        timestamp UInt64,
+        zone LowCardinality(String),
+        riseFallRates Array(Float32),
+        riseFallRatesOfTimezone Array(Float32)
+    ) ENGINE = MergeTree 
     ORDER BY ts
-    SETTINGS 
-        index_granularity = 1024,           -- Optimized for timestamp-based queries
-        min_rows_for_wide_part = 0,         -- Always use wide parts for better performance
-        min_bytes_for_wide_part = 0,
-        max_parts_in_total = 100000,        -- Allow more parts for high-frequency inserts
-        parts_to_delay_insert = 10000,      -- Higher threshold before delays
-        parts_to_throw_insert = 50000       -- Higher threshold before rejecting
+    SETTINGS index_granularity = 8192
     """
     
-    schemas = {"mexc_messages": mexc_messages_schema}
+    # Kline table - OHLCV candlestick data
+    kline_schema = """
+    CREATE TABLE mexc_kline (
+        ts DateTime64(3, 'UTC'),
+        symbol LowCardinality(String),
+        interval LowCardinality(String),
+        startTime UInt64,
+        open Float64,
+        close Float64,
+        high Float64,
+        low Float64,
+        amount Decimal64(8),
+        quantity UInt64,
+        realOpen Float64,
+        realClose Float64,
+        realHigh Float64,
+        realLow Float64
+    ) ENGINE = MergeTree 
+    ORDER BY ts
+    SETTINGS index_granularity = 8192
+    """
+    
+    # Deal table - Trade execution data
+    deal_schema = """
+    CREATE TABLE mexc_deal (
+        ts DateTime64(3, 'UTC'),
+        symbol LowCardinality(String),
+        price Float64,
+        volume Decimal32(4),
+        side LowCardinality(String),
+        tradeType UInt8,
+        orderType UInt8,
+        matchType UInt8,
+        tradeTime UInt64
+    ) ENGINE = MergeTree 
+    ORDER BY ts
+    SETTINGS index_granularity = 8192
+    """
+    
+    # Depth table - Order book data with optimized array storage
+    depth_schema = """
+    CREATE TABLE mexc_depth (
+        ts DateTime64(3, 'UTC'),
+        symbol LowCardinality(String),
+        version UInt64,
+        bestBidPrice Float64,
+        bestBidQty UInt32,
+        bestAskPrice Float64,
+        bestAskQty UInt32,
+        bidLevels UInt8,
+        askLevels UInt8,
+        asks Array(Tuple(Float64, UInt32, UInt8)),
+        bids Array(Tuple(Float64, UInt32, UInt8))
+    ) ENGINE = MergeTree 
+    ORDER BY ts
+    SETTINGS index_granularity = 8192
+    """
+    
+    schemas = {
+        "mexc_ticker": ticker_schema,
+        "mexc_kline": kline_schema, 
+        "mexc_deal": deal_schema,
+        "mexc_depth": depth_schema
+    }
     
     # Create dead letter table for error handling (with raw message storage)
     dead_letter_schema = """
@@ -80,7 +152,7 @@ def create_database_tables(client):
     logging.info("Dead-letter table created.")
     
     # Drop existing tables to start fresh
-    old_tables = ["deals", "klines", "tickers", "depth", "mexc_messages"]
+    old_tables = ["deals", "klines", "tickers", "depth", "mexc_messages", "mexc_ticker", "mexc_kline", "mexc_deal", "mexc_depth"]
     for table_name in old_tables:
         try:
             client.execute(f"DROP TABLE IF EXISTS {table_name}")
@@ -88,145 +160,30 @@ def create_database_tables(client):
         except Exception as e:
             logging.info(f"No existing table to drop: {table_name}")
     
-    # Create the single wide table
+    # Create optimized specialized tables
     for table_name, schema in schemas.items():
-        logging.info(f"--- Creating temporal sequencing table: {table_name} ---")
+        logging.info(f"--- Creating optimized table: {table_name} ---")
         client.execute(schema)
-        logging.info(f"Created temporal sequencing table: {table_name}")
+        logging.info(f"Created optimized table: {table_name}")
     
-    # Create filtered views for each message type
-    logging.info("--- Creating filtered message type views ---")
+    # Create unified temporal sequence view across all specialized tables
+    logging.info("--- Creating unified temporal sequence view ---")
     
-    # Deals view - filters for deal messages only with extracted fields
-    try:
-        client.execute("DROP VIEW IF EXISTS deals_view")
-        deals_view_sql = """
-        CREATE VIEW deals_view AS
-        SELECT 
-            ts,
-            JSONExtractString(deal, 'symbol') as symbol,
-            JSONExtractFloat(deal, 'price') as price,
-            JSONExtractFloat(deal, 'volume') as volume,
-            JSONExtractString(deal, 'side') as side,
-            JSONExtractUInt(deal, 'tradeType') as trade_type,
-            JSONExtractUInt(deal, 'orderType') as order_type,
-            JSONExtractUInt(deal, 'matchType') as match_type,
-            deal as deal_data
-        FROM mexc_messages 
-        WHERE deal IS NOT NULL
-        ORDER BY ts DESC
-        """
-        client.execute(deals_view_sql)
-        logging.info("Created view: deals_view")
-    except Exception as e:
-        logging.warning(f"Could not create deals_view: {e}")
-    
-    # Klines view - filters for kline messages only with extracted fields
-    try:
-        client.execute("DROP VIEW IF EXISTS klines_view")
-        klines_view_sql = """
-        CREATE VIEW klines_view AS
-        SELECT 
-            ts,
-            JSONExtractString(kline, 'symbol') as symbol,
-            JSONExtractString(kline, 'interval') as interval,
-            JSONExtractFloat(kline, 'open') as open,
-            JSONExtractFloat(kline, 'close') as close,
-            JSONExtractFloat(kline, 'high') as high,
-            JSONExtractFloat(kline, 'low') as low,
-            JSONExtractFloat(kline, 'amount') as amount,
-            JSONExtractFloat(kline, 'quantity') as quantity,
-            kline as kline_data
-        FROM mexc_messages 
-        WHERE kline IS NOT NULL
-        ORDER BY ts DESC
-        """
-        client.execute(klines_view_sql)
-        logging.info("Created view: klines_view")
-    except Exception as e:
-        logging.warning(f"Could not create klines_view: {e}")
-    
-    # Tickers view - filters for ticker messages only with extracted fields
-    try:
-        client.execute("DROP VIEW IF EXISTS tickers_view")
-        tickers_view_sql = """
-        CREATE VIEW tickers_view AS
-        SELECT 
-            ts,
-            JSONExtractString(ticker, 'symbol') as symbol,
-            JSONExtractFloat(ticker, 'lastPrice') as last_price,
-            JSONExtractFloat(ticker, 'fairPrice') as fair_price,
-            JSONExtractFloat(ticker, 'indexPrice') as index_price,
-            JSONExtractFloat(ticker, 'fundingRate') as funding_rate,
-            JSONExtractFloat(ticker, 'riseFallRate') as rise_fall_rate,
-            JSONExtractFloat(ticker, 'volume24') as volume_24h,
-            JSONExtractFloat(ticker, 'amount24') as amount_24h,
-            JSONExtractFloat(ticker, 'high24Price') as high_24h,
-            JSONExtractFloat(ticker, 'lower24Price') as low_24h,
-            JSONExtractFloat(ticker, 'bid1') as bid1,
-            JSONExtractFloat(ticker, 'ask1') as ask1,
-            ticker as ticker_data
-        FROM mexc_messages 
-        WHERE ticker IS NOT NULL
-        ORDER BY ts DESC
-        """
-        client.execute(tickers_view_sql)
-        logging.info("Created view: tickers_view")
-    except Exception as e:
-        logging.warning(f"Could not create tickers_view: {e}")
-    
-    # Depth view - filters for depth messages only with extracted fields
-    try:
-        client.execute("DROP VIEW IF EXISTS depth_view")
-        depth_view_sql = """
-        CREATE VIEW depth_view AS
-        SELECT 
-            ts,
-            JSONExtractString(depth, 'symbol') as symbol,
-            JSONExtractFloat(depth, 'bestBidPrice') as best_bid_price,
-            JSONExtractFloat(depth, 'bestBidQty') as best_bid_qty,
-            JSONExtractFloat(depth, 'bestAskPrice') as best_ask_price,
-            JSONExtractFloat(depth, 'bestAskQty') as best_ask_qty,
-            JSONExtractUInt(depth, 'bidLevels') as bid_levels,
-            JSONExtractUInt(depth, 'askLevels') as ask_levels,
-            JSONExtractUInt(depth, 'version') as version,
-            depth as depth_data
-        FROM mexc_messages 
-        WHERE depth IS NOT NULL
-        ORDER BY ts DESC
-        """
-        client.execute(depth_view_sql)
-        logging.info("Created view: depth_view")
-    except Exception as e:
-        logging.warning(f"Could not create depth_view: {e}")
-    
-    # Temporal sequence view - shows message flow chronologically
     try:
         client.execute("DROP VIEW IF EXISTS message_sequence")
         message_sequence_sql = """
         CREATE VIEW message_sequence AS
-        SELECT 
-            ts,
-            CASE 
-                WHEN deal IS NOT NULL THEN 'deal'
-                WHEN kline IS NOT NULL THEN 'kline' 
-                WHEN ticker IS NOT NULL THEN 'ticker'
-                WHEN depth IS NOT NULL THEN 'depth'
-                WHEN dl IS NOT NULL THEN 'dead_letter'
-                ELSE 'unknown'
-            END as message_type,
-            CASE 
-                WHEN deal IS NOT NULL THEN JSONExtractString(deal, 'symbol')
-                WHEN kline IS NOT NULL THEN JSONExtractString(kline, 'symbol')
-                WHEN ticker IS NOT NULL THEN JSONExtractString(ticker, 'symbol')
-                WHEN depth IS NOT NULL THEN JSONExtractString(depth, 'symbol')
-                ELSE 'N/A'
-            END as symbol
-        FROM mexc_messages
+        SELECT ts, 'ticker' as message_type, symbol FROM mexc_ticker
+        UNION ALL
+        SELECT ts, 'kline' as message_type, symbol FROM mexc_kline  
+        UNION ALL
+        SELECT ts, 'deal' as message_type, symbol FROM mexc_deal
+        UNION ALL
+        SELECT ts, 'depth' as message_type, symbol FROM mexc_depth
         ORDER BY ts DESC
         """
         client.execute(message_sequence_sql)
-        logging.info("Created view: message_sequence")
+        logging.info("Created unified temporal sequence view")
     except Exception as e:
         logging.warning(f"Could not create message_sequence view: {e}")
     
@@ -248,7 +205,8 @@ def main():
         print("\n✅ ClickHouse setup completed successfully!")
         print("Database tables created with proper schema.")
         print("Ready to receive MEXC data through client.py")
-        print("Use filtered views for specific data types: deals_view, klines_view, tickers_view, depth_view")
+        print("Use specialized tables for data types: mexc_ticker, mexc_kline, mexc_deal, mexc_depth")
+        print("Use message_sequence view for temporal ordering across all message types")
         
     except Exception as e:
         logging.error(f"Setup failed: {e}", exc_info=True)
