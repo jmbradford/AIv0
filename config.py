@@ -1,59 +1,73 @@
-# config.py
-# This file centralizes all static configuration for the application.
-# This makes it easy to change settings like symbols or topics without editing the main logic.
-
 import os
-from dotenv import load_dotenv
+from enum import Enum
 
-# Load environment variables from the .env file in the root directory
-load_dotenv()
+# MEXC WebSocket Configuration
+MEXC_WS_URL = "wss://contract.mexc.com/edge"
+PING_INTERVAL = 15  # seconds (MEXC recommends 10-20s)
+RECONNECT_DELAY = 5  # seconds
+MAX_RECONNECT_ATTEMPTS = 10
 
-# -- Environment Settings
-# Defines the environment for the pipeline, e.g., 'local' or 'production'.
-# This helps in managing environment-specific configurations.
-PIPELINE_ENVIRONMENT = 'local'
+# Subscriptions
+SUBSCRIPTIONS = [
+    {"method": "sub.ticker", "param": {"symbol": "BTC_USDT"}},
+    {"method": "sub.deal", "param": {"symbol": "BTC_USDT"}},
+    {"method": "sub.depth.full", "param": {"symbol": "BTC_USDT", "limit": 20}}
+]
 
-# -- MEXC API Configuration
-# The base URL for the MEXC Futures WebSocket API.
-MEXC_WSS_URL = "wss://contract.mexc.com/edge"
+# ClickHouse Configuration
+CLICKHOUSE_HOST = os.getenv('CLICKHOUSE_HOST', 'localhost')
+CLICKHOUSE_PORT = int(os.getenv('CLICKHOUSE_PORT', '9000'))
+CLICKHOUSE_HTTP_PORT = int(os.getenv('CLICKHOUSE_HTTP_PORT', '8123'))
+CLICKHOUSE_USER = os.getenv('CLICKHOUSE_USER', 'default')
+CLICKHOUSE_PASSWORD = os.getenv('CLICKHOUSE_PASSWORD', '')
+CLICKHOUSE_DATABASE = 'mexc_data'
+CLICKHOUSE_TABLE = 'market_data'
+CLICKHOUSE_BUFFER_TABLE = 'market_data_buffer'
 
-# The symbol for which to fetch data.
-# Format: 'SYMBOL_USDT'
-SYMBOL = 'ETH_USDT'
+# Message Types
+class MessageType(Enum):
+    TICKER = 't'
+    DEAL = 'd'
+    DEPTH = 'dp'
+    DEADLETTER = 'dl'
 
-# -- Kafka Configuration
-# List of Kafka brokers. For local Docker setup, this is the port exposed to the host.
-# For the ClickHouse container, the address is 'kafka:29092'.
-KAFKA_BROKERS_HOST = ['localhost:9092']
-KAFKA_BROKERS_INTERNAL = ['kafka:29092']
+# Data Processing Configuration
+BUFFER_SIZE = 1000  # Emergency buffer size
+STATS_INTERVAL = 15  # seconds
+MAX_ERROR_COUNT = 100  # Maximum errors before emergency shutdown
 
-# Kafka topics for different data streams.
-# Using distinct topics allows for better data separation and management.
-TOPICS = {
-    "deals": "mexc_deals",
-    "klines": "mexc_klines",
-    "tickers": "mexc_tickers",
-    "depth": "mexc_depth",
+# Field Mappings
+TICKER_FIELDS = ['lastPrice', 'fairPrice', 'indexPrice', 'holdVol', 'fundingRate']
+DEAL_FIELDS = ['p', 'v', 'T']  # price, volume, trade direction (T: 1=buy, 2=sell)
+DEPTH_FIELDS = ['bids', 'asks']  # Each contains [price, amount, count] arrays
+
+# Symbol-specific configurations
+BTC_CONFIG = {
+    "symbol": "BTC_USDT",
+    "table_name": "btc",
+    "subscriptions": [
+        {"method": "sub.ticker", "param": {"symbol": "BTC_USDT"}},
+        {"method": "sub.deal", "param": {"symbol": "BTC_USDT"}},
+        {"method": "sub.depth.full", "param": {"symbol": "BTC_USDT", "limit": 20}}
+    ]
 }
 
-# -- ClickHouse Configuration
-# Connection details for the ClickHouse database.
-# These should match the environment variables in docker-compose.yml.
-CLICKHOUSE_HOST = 'localhost'
-CLICKHOUSE_PORT = 9000
-CLICKHOUSE_DB = 'mexc_data'
-CLICKHOUSE_USER = 'default'
-CLICKHOUSE_PASSWORD = ''
-
-# -- Data Subscription Details
-# Defines the WebSocket subscription channels and parameters.
-# This structure makes it easy to add or remove subscriptions.
-SUBSCRIPTIONS = {
-    "klines": {"method": "sub.kline", "param": {"symbol": SYMBOL, "interval": "Min1"}},
-    "deals": {"method": "sub.deal", "param": {"symbol": SYMBOL}},
-    "tickers": {"method": "sub.ticker", "param": {"symbol": SYMBOL}},
-    "depth": {"method": "sub.depth.full", "param": {"symbol": SYMBOL, "compress": False}},
+ETH_CONFIG = {
+    "symbol": "ETH_USDT",
+    "table_name": "eth", 
+    "subscriptions": [
+        {"method": "sub.ticker", "param": {"symbol": "ETH_USDT"}},
+        {"method": "sub.deal", "param": {"symbol": "ETH_USDT"}},
+        {"method": "sub.depth.full", "param": {"symbol": "ETH_USDT", "limit": 20}}
+    ]
 }
 
-# --- Data Retention Policy ---
-DATA_RETENTION_DAYS = 30
+SOL_CONFIG = {
+    "symbol": "SOL_USDT",
+    "table_name": "sol",
+    "subscriptions": [
+        {"method": "sub.ticker", "param": {"symbol": "SOL_USDT"}},
+        {"method": "sub.deal", "param": {"symbol": "SOL_USDT"}},
+        {"method": "sub.depth.full", "param": {"symbol": "SOL_USDT", "limit": 20}}
+    ]
+}

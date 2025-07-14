@@ -1,13 +1,7 @@
-# Minimal dependencies for real-time ClickHouse ingestion
-
-# For connecting to ClickHouse database
+websocket-client
 clickhouse-driver
-
-# For WebSocket client connections  
-websockets
-
-# For HTTP requests to ClickHouse
-requests
-
-# For environment variables (lightweight)
-python-dotenv
+asyncio-pool
+aiohttp
+python-dateutil
+pandas
+pyarrow

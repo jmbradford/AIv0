@@ -1,300 +1,241 @@
-# verif.py
-# Verification script for single-table ClickHouse schema optimization
-# Updated for mexc_data table with multi-line string format
-
-import time
-import logging
+#!/usr/bin/env python3
+import sys
 from clickhouse_driver import Client
-import config
-from clickhouse_driver.errors import ServerException
-import datetime
-import decimal
+from config import (
+    CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
+    CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE, CLICKHOUSE_TABLE, CLICKHOUSE_BUFFER_TABLE
+)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def connect_with_retry(max_retries=3):
+    """Connect to ClickHouse with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            client = Client(
+                host=CLICKHOUSE_HOST,
+                port=CLICKHOUSE_PORT,
+                user=CLICKHOUSE_USER,
+                password=CLICKHOUSE_PASSWORD,
+                database=CLICKHOUSE_DATABASE
+            )
+            
+            # Test connection by checking if database exists
+            client.execute("SELECT 1")
+            print(f"✅ Connected to ClickHouse successfully (attempt {attempt + 1})")
+            return client
+            
+        except Exception as e:
+            print(f"❌ Connection attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2)
+            else:
+                print(f"❌ Failed to connect after {max_retries} attempts")
+                return None
 
-# --- Configuration ---
-TABLE_TO_VERIFY = "mexc_data"
-NUM_RECORDS_TO_FETCH = 10
-
-def create_clickhouse_client():
-    """Establishes and returns a connection to the ClickHouse database."""
+def verify_tables_exist(client):
+    """Verify required symbol-specific tables exist."""
     try:
-        client = Client(
-            host=config.CLICKHOUSE_HOST,
-            port=config.CLICKHOUSE_PORT,
-            user=config.CLICKHOUSE_USER,
-            password='',
-            database=config.CLICKHOUSE_DB
-        )
-        client.execute('SELECT 1')
-        logging.info("Successfully connected to ClickHouse for verification.")
-        return client
-    except Exception as e:
-        logging.error(f"Failed to connect to ClickHouse: {e}")
-        return None
-
-def verify_optimized_table(client):
-    """
-    Verifies the single mexc_data table and shows record counts and sample data.
-    """
-    if not client:
-        logging.error("ClickHouse client is not available. Aborting verification.")
-        return False
-
-    print(f"\n{'='*70}")
-    print(f"SINGLE-TABLE SCHEMA VERIFICATION")
-    print(f"{'='*70}")
-
-    try:
-        # Get total count for the table
-        count_query = f"SELECT COUNT(*) FROM {TABLE_TO_VERIFY}"
-        table_count = client.execute(count_query)[0][0]
-        print(f"Total records: {table_count}")
+        btc_exists = client.execute("EXISTS TABLE btc")[0][0]
+        eth_exists = client.execute("EXISTS TABLE eth")[0][0]
+        sol_exists = client.execute("EXISTS TABLE sol")[0][0]
         
-        if table_count == 0:
-            print("ERROR: No data found in table.")
+        if not (btc_exists and eth_exists and sol_exists):
+            print(f"❌ Symbol tables missing - run ch_setup.py first")
             return False
-        
-        # Get table schema information
-        schema_query = f"DESCRIBE {TABLE_TO_VERIFY}"
-        schema = client.execute(schema_query)
-        print(f"Schema ({len(schema)} columns):")
-        for column_name, column_type, default_type, default_expr, comment, codec_expr, ttl_expr in schema:
-            print(f"   {column_name}: {column_type}")
-        
-        # Get message type distribution
-        type_query = """
-        SELECT 
-            CASE 
-                WHEN ticker != '' THEN 'ticker'
-                WHEN kline != '' THEN 'kline'
-                WHEN deal != '' THEN 'deal'
-                WHEN depth != '' THEN 'depth'
-                ELSE 'unknown'
-            END as message_type,
-            COUNT(*) as count
-        FROM mexc_data
-        GROUP BY message_type
-        ORDER BY count DESC
-        """
-        type_distribution = client.execute(type_query)
-        
-        print(f"\nMESSAGE TYPE DISTRIBUTION:")
-        print("-" * 30)
-        for msg_type, count in type_distribution:
-            print(f"{msg_type:8}: {count:8,} records")
-        
-        # Get most recent records from each type
-        print(f"\nRECENT ENTRIES BY TYPE:")
-        print("-" * 70)
-        
-        for msg_type, _ in type_distribution:
-            if msg_type == 'unknown':
-                continue
-                
-            column_name = msg_type
-            query = f"""
-            SELECT ts, {column_name}
-            FROM {TABLE_TO_VERIFY}
-            WHERE {column_name} != ''
-            ORDER BY ts DESC
-            LIMIT 2
-            """
-            records = client.execute(query)
             
-            print(f"\n{msg_type.upper()} Messages:")
-            for i, record in enumerate(records, 1):
-                ts_val = record[0]
-                data_val = record[1]
-                # Show first few lines of multi-line data
-                data_lines = data_val.split('\n')[:3]
-                data_preview = ' | '.join(data_lines)
-                if len(data_val.split('\n')) > 3:
-                    data_preview += " | ..."
-                print(f"  #{i}: {ts_val} -> {data_preview}")
-        
-        logging.info(f"Successfully verified table '{TABLE_TO_VERIFY}': {table_count} records")
+        print(f"✅ Symbol tables exist: btc.bin, eth.bin, sol.bin")
         return True
-
-    except ServerException as e:
-        logging.error(f"ClickHouse server error occurred while querying table: {e}")
-        return False
+        
     except Exception as e:
-        logging.error(f"Unexpected error occurred: {e}", exc_info=True)
+        print(f"❌ Error checking tables: {e}")
         return False
 
-def verify_temporal_ordering(client):
-    """Verify that temporal ordering works for the single table."""
-    print(f"\n{'='*70}")
-    print("TEMPORAL ORDERING VERIFICATION")
-    print(f"{'='*70}")
+def verify_data():
+    """Verify data in ClickHouse by showing last 3 entries of each type."""
     
-    try:
-        # Use the message_sequence view to check unified temporal ordering
-        query = """
-        SELECT ts, message_type
-        FROM message_sequence
-        ORDER BY ts DESC
-        LIMIT 15
-        """
-        result = client.execute(query)
-        
-        print(f"UNIFIED TEMPORAL SEQUENCE (most recent {len(result)} messages):")
-        print("-" * 70)
-        print("Timestamp                   | Type")
-        print("-" * 70)
-        
-        for ts, message_type in result:
-            print(f"{ts} | {message_type:7}")
-        
-        # Check time gaps between messages
-        if len(result) > 1:
-            print(f"\nTIME GAP ANALYSIS:")
-            print("-" * 50)
-            for i in range(1, min(6, len(result))):
-                current_ts = result[i-1][0]
-                prev_ts = result[i][0]
-                if isinstance(current_ts, datetime.datetime) and isinstance(prev_ts, datetime.datetime):
-                    gap = (current_ts - prev_ts).total_seconds()
-                    print(f"Gap {i}: {gap:.3f} seconds between {result[i-1][1]} and {result[i][1]}")
-        
-        logging.info("Temporal ordering verification completed successfully.")
-        return True
-        
-    except Exception as e:
-        logging.error(f"Temporal ordering verification failed: {e}")
-        print(f"Error: {e}")
-        return False
-
-def verify_storage_efficiency(client):
-    """Verify storage efficiency of the single-table schema."""
-    print(f"\n{'='*70}")
-    print("STORAGE EFFICIENCY VERIFICATION")
-    print(f"{'='*70}")
-    
-    try:
-        # Get table size and compression information
-        size_query = """
-        SELECT 
-            table,
-            formatReadableSize(total_bytes) as size_formatted,
-            total_bytes,
-            formatReadableSize(total_bytes_uncompressed) as uncompressed_size,
-            total_bytes_uncompressed,
-            round(total_bytes_uncompressed / total_bytes, 2) as compression_ratio
-        FROM system.tables 
-        WHERE database = current_database() AND table = 'mexc_data'
-        """
-        size_result = client.execute(size_query)
-        
-        if size_result:
-            table, size_formatted, total_bytes, uncompressed_size, total_bytes_uncompressed, compression_ratio = size_result[0]
-            
-            print(f"STORAGE METRICS:")
-            print("-" * 50)
-            print(f"Table name:          {table}")
-            print(f"Compressed size:     {size_formatted}")
-            print(f"Uncompressed size:   {uncompressed_size}")
-            print(f"Compression ratio:   {compression_ratio}x")
-            print(f"Space saved:         {round((1 - 1/compression_ratio) * 100, 1)}%")
-            
-            print(f"\n🎯 STORAGE OPTIMIZATION BENEFITS:")
-            print("   ✅ Single table eliminates NULL column waste")
-            print("   ✅ String compression provides excellent ratios")
-            print("   ✅ Multi-line format reduces storage overhead")
-            print("   ✅ No redundant schema definitions")
-        else:
-            print("Could not retrieve storage metrics")
-        
-        return True
-        
-    except Exception as e:
-        logging.error(f"Storage efficiency verification failed: {e}")
-        print(f"Error: {e}")
-        return False
-
-def verify_query_performance(client):
-    """Test query performance on the optimized single-table schema."""
-    print(f"\n{'='*70}")
-    print("QUERY PERFORMANCE VERIFICATION")
-    print(f"{'='*70}")
-    
-    try:
-        # Test various query patterns for single table
-        queries = [
-            ("Total records", "SELECT COUNT(*) FROM mexc_data"),
-            ("Recent messages", "SELECT COUNT(*) FROM mexc_data WHERE ts >= now() - INTERVAL 5 MINUTE"),
-            ("Message type counts", "SELECT message_type, COUNT(*) FROM message_sequence GROUP BY message_type"),
-            ("Time window analysis", "SELECT toStartOfMinute(ts) as minute, COUNT(*) FROM mexc_data GROUP BY minute ORDER BY minute DESC LIMIT 5"),
-            ("Ticker data search", "SELECT COUNT(*) FROM mexc_data WHERE ticker LIKE '%fairPrice%'"),
-        ]
-        
-        print("QUERY PERFORMANCE TESTS:")
-        print("-" * 70)
-        
-        for query_name, query in queries:
-            start_time = time.time()
-            try:
-                result = client.execute(query)
-                execution_time = (time.time() - start_time) * 1000  # ms
-                result_count = len(result) if isinstance(result, list) else 1
-                print(f"  {query_name:20} | {execution_time:6.1f}ms | {result_count} rows")
-            except Exception as e:
-                print(f"  {query_name:20} | ERROR: {str(e)[:30]}...")
-        
-        print(f"\n🎯 PERFORMANCE BENEFITS:")
-        print("   ✅ Single table: No JOINs needed")
-        print("   ✅ String compression: Excellent compression ratios")
-        print("   ✅ Temporal indexing: Efficient time-based filtering")  
-        print("   ✅ Multi-line format: Efficient field storage")
-        
-        return True
-        
-    except Exception as e:
-        logging.error(f"Query performance verification failed: {e}")
-        print(f"Error: {e}")
-        return False
-
-def main():
-    """
-    Main function to run comprehensive verification of the single-table schema.
-    """
-    print("===== STARTING SINGLE-TABLE SCHEMA VERIFICATION =====")
-    client = create_clickhouse_client()
+    # Connect with retry logic
+    client = connect_with_retry()
     if not client:
-        print("Aborting due to connection failure.")
-        return
-
+        print("❌ Cannot establish ClickHouse connection - aborting verification")
+        sys.exit(1)
+        
+    # Verify tables exist
+    if not verify_tables_exist(client):
+        print("❌ Required tables missing - run ch_setup.py first")
+        sys.exit(1)
+    
     try:
-        # Verify the single table
-        table_success = verify_optimized_table(client)
+        print("\n" + "="*80)
+        print("DATA VERIFICATION REPORT")
+        print("="*80)
         
-        # Verify temporal ordering
-        temporal_success = verify_temporal_ordering(client)
+        # Check symbol-specific file sizes
+        print("💾 Symbol-specific storage status:")
         
-        # Verify storage efficiency
-        storage_success = verify_storage_efficiency(client)
+        # Get counts from each symbol table
+        btc_count = client.execute("SELECT COUNT(*) FROM btc")[0][0]
+        eth_count = client.execute("SELECT COUNT(*) FROM eth")[0][0] 
+        sol_count = client.execute("SELECT COUNT(*) FROM sol")[0][0]
+        total_count = btc_count + eth_count + sol_count
         
-        # Verify query performance
-        performance_success = verify_query_performance(client)
+        print(f"\nTotal records appended: {total_count}")
+        print(f"  btc.bin: {btc_count} records")
+        print(f"  eth.bin: {eth_count} records")
+        print(f"  sol.bin: {sol_count} records")
         
-        if all([table_success, temporal_success, storage_success, performance_success]):
-            print(f"\n{'='*70}")
-            print("ALL VERIFICATION CHECKS PASSED!")
-            print("SINGLE-TABLE SCHEMA WORKING PERFECTLY!")
-            print("MASSIVE STORAGE REDUCTION ACHIEVED!")
-            print("OPTIMIZED FOR MULTI-LINE STRING FORMAT!")
-            print(f"{'='*70}")
-        else:
-            print("\nWARNING: Some verification checks failed. Please check the logs.")
-            
+        # Get counts by message type for each symbol
+        print("\nRecords by symbol and message type:")
+        for symbol_table in ['btc', 'eth', 'sol']:
+            try:
+                type_counts = client.execute(f"""
+                    SELECT mt, COUNT(*) as count 
+                    FROM {symbol_table}
+                    GROUP BY mt 
+                    ORDER BY mt
+                """)
+                
+                symbol_total = sum([count for _, count in type_counts])
+                print(f"  {symbol_table.upper()}: {symbol_total} total")
+                for msg_type, count in type_counts:
+                    print(f"    {msg_type}: {count}")
+            except Exception as e:
+                print(f"  {symbol_table.upper()}: No data yet")
+        
+        # Show last 3 ticker messages from each symbol
+        print("\n" + "-"*80)
+        print("LAST 3 TICKER MESSAGES (BY SYMBOL)")
+        print("-"*80)
+        
+        for symbol_table in ['btc', 'eth', 'sol']:
+            print(f"\n{symbol_table.upper()} Ticker Messages:")
+            try:
+                ticker_data = client.execute(f"""
+                    SELECT ts, m
+                    FROM {symbol_table}
+                    WHERE mt = 't'
+                    ORDER BY ts DESC 
+                    LIMIT 3
+                """)
+                
+                if ticker_data:
+                    print("  Timestamp            | Message (lastPrice|fairPrice|indexPrice|holdVol|fundingRate)")
+                    print("  " + "-"*90)
+                    for row in reversed(ticker_data):
+                        print(f"  {row[0]} | {row[1]}")
+                else:
+                    print("  No ticker data found")
+            except Exception as e:
+                print(f"  Error: {e}")
+        
+        # Show last 3 deal messages from each symbol
+        print("\n" + "-"*80)
+        print("LAST 3 DEAL MESSAGES (BY SYMBOL)")
+        print("-"*80)
+        
+        for symbol_table in ['btc', 'eth', 'sol']:
+            print(f"\n{symbol_table.upper()} Deal Messages:")
+            try:
+                deal_data = client.execute(f"""
+                    SELECT ts, m
+                    FROM {symbol_table}
+                    WHERE mt = 'd'
+                    ORDER BY ts DESC 
+                    LIMIT 3
+                """)
+                
+                if deal_data:
+                    print("  Timestamp            | Message (price|volume|direction)")
+                    print("  " + "-"*65)
+                    for row in reversed(deal_data):
+                        print(f"  {row[0]} | {row[1]}")
+                else:
+                    print("  No deal data found")
+            except Exception as e:
+                print(f"  Error: {e}")
+        
+        # Show last 3 depth messages from each symbol (simplified)
+        print("\n" + "-"*80)
+        print("LAST 3 DEPTH MESSAGES (BY SYMBOL)")
+        print("-"*80)
+        
+        for symbol_table in ['btc', 'eth', 'sol']:
+            print(f"\n{symbol_table.upper()} Depth Messages:")
+            try:
+                depth_data = client.execute(f"""
+                    SELECT ts, m
+                    FROM {symbol_table}
+                    WHERE mt = 'dp'
+                    ORDER BY ts DESC 
+                    LIMIT 3
+                """)
+                
+                if depth_data:
+                    print("  Depth data (truncated for display):")
+                    for row in reversed(depth_data):
+                        ts, message = row
+                        # Split bids and asks 
+                        parts = message.split('|')
+                        bids_display = parts[0][:50] + "..." if len(parts[0]) > 50 else parts[0]
+                        asks_display = parts[1][:50] + "..." if len(parts) > 1 and len(parts[1]) > 50 else (parts[1] if len(parts) > 1 else "")
+                        print(f"  {ts}")
+                        print(f"    Bids: {bids_display}")
+                        print(f"    Asks: {asks_display}")
+                else:
+                    print("  No depth data found")
+            except Exception as e:
+                print(f"  Error: {e}")
+        
+        # Storage statistics - symbol-specific files
+        print("\n" + "-"*80)
+        print("STORAGE STATISTICS")
+        print("-"*80)
+        
+        print("  Symbol-specific append-only architecture: StripeLog tables")
+        print("  Files grow continuously with no parts or merging")
+        print("  Schema: ts (timestamp), mt (message type), m (message data)")
+        
+        # Check Docker volume size growth
+        try:
+            import subprocess
+            result = subprocess.run(['docker', 'exec', 'mexc-clickhouse', 'du', '-sh', '/var/lib/clickhouse/'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                volume_size = result.stdout.strip().split('\t')[0]
+                print(f"  Total ClickHouse volume size: {volume_size}")
+        except Exception:
+            print("  Volume size: Unable to check")
+        
+        # Show individual symbol file info
+        try:
+            for symbol in ['btc', 'eth', 'sol']:
+                file_result = subprocess.run(['docker', 'exec', 'mexc-clickhouse', 'find', 
+                                            f'/var/lib/clickhouse/data/{CLICKHOUSE_DATABASE}/{symbol}/', 
+                                            '-name', '*.bin', '-exec', 'du', '-h', '{}', ';'], 
+                                           capture_output=True, text=True)
+                if file_result.returncode == 0 and file_result.stdout.strip():
+                    lines = file_result.stdout.strip().split('\n')
+                    for line in lines:
+                        if 'data.bin' in line:
+                            size = line.split('\t')[0]
+                            print(f"  {symbol}.bin: {size}")
+                else:
+                    print(f"  {symbol}.bin: File not found yet")
+        except Exception:
+            print("  Individual file sizes: Unable to check")
+        
+        print("\n" + "="*80)
+        print("Verification completed successfully!")
+        
+    except Exception as e:
+        print(f"❌ Error during verification: {e}")
+        if "Connection refused" in str(e):
+            print("💡 Hint: Is ClickHouse container running? Try: docker-compose up -d")
+        elif "doesn't exist" in str(e):
+            print("💡 Hint: Tables missing? Try: python ch_setup.py")
+        sys.exit(1)
     finally:
         if client:
             client.disconnect()
-            logging.info("Disconnected from ClickHouse.")
-    
-    print("\n===== VERIFICATION FINISHED =====")
 
 if __name__ == "__main__":
-    main()
+    verify_data()

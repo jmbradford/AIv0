@@ -1,147 +1,141 @@
-# ch_setup.py
-# ClickHouse database setup and table creation
-# Creates schema for MEXC data pipeline
-
+#!/usr/bin/env python3
+import sys
 import time
-import logging
 from clickhouse_driver import Client
-import config
-from clickhouse_driver.errors import ServerException
+from config import (
+    CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, 
+    CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE, CLICKHOUSE_TABLE, CLICKHOUSE_BUFFER_TABLE
+)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-def create_clickhouse_client():
-    """Creates and returns a ClickHouse client connection."""
-    try:
-        client = Client(
-            host=config.CLICKHOUSE_HOST,
-            port=config.CLICKHOUSE_PORT,
-            user=config.CLICKHOUSE_USER,
-            password='',
-            database=config.CLICKHOUSE_DB
-        )
-        client.execute('SELECT 1')
-        logging.info("Successfully connected to ClickHouse.")
-        return client
-    except Exception as e:
-        logging.error(f"Failed to connect to ClickHouse: {e}")
-        return None
-
-def create_database(client):
-    """Creates the database if it doesn't exist."""
-    logging.info(f"Ensuring database '{config.CLICKHOUSE_DB}' exists.")
-    client.execute(f"CREATE DATABASE IF NOT EXISTS {config.CLICKHOUSE_DB}")
-    client.execute(f"USE {config.CLICKHOUSE_DB}")
-    logging.info(f"Switched to database '{config.CLICKHOUSE_DB}'.")
-
-def create_database_tables(client):
-    """Creates optimized single-table schema for maximum storage efficiency."""
+def drop_system_log_tables():
+    """Drop system log tables to prevent storage bloat."""
+    client = Client(
+        host=CLICKHOUSE_HOST,
+        port=CLICKHOUSE_PORT,
+        user=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD
+    )
     
-    # Single optimized table with multi-line string format for all message types
-    mexc_data_schema = """
-    CREATE TABLE mexc_data (
-        ts DateTime64(3, 'UTC'),
-        ticker String,
-        kline String,
-        deal String,
-        depth String,
-        dl String
-    ) ENGINE = MergeTree()
-    ORDER BY ts
-    SETTINGS index_granularity = 8192
-    """
+    system_log_tables = [
+        'metric_log', 'query_log', 'trace_log', 'asynchronous_metric_log',
+        'processors_profile_log', 'query_thread_log', 'part_log', 'text_log',
+        'asynchronous_insert_log', 'opentelemetry_span_log', 'session_log',
+        'zookeeper_log', 'transaction_log', 'crash_log'
+    ]
     
-    schemas = {
-        "mexc_data": mexc_data_schema
-    }
-    
-    # Create dead letter table for error handling (with raw message storage)
-    dead_letter_schema = """
-    CREATE TABLE dead_letter (
-        timestamp DateTime DEFAULT now(), 
-        table_name String, 
-        raw_data String, 
-        error_message String
-    ) ENGINE = MergeTree() 
-    ORDER BY timestamp
-    SETTINGS index_granularity = 1024
-    """
-    
-    logging.info("--- Preparing Dead-Letter Table ---")
-    client.execute("DROP TABLE IF EXISTS dead_letter")
-    client.execute(dead_letter_schema)
-    logging.info("Dead-letter table created.")
-    
-    # Drop existing tables to start fresh
-    old_tables = ["deals", "klines", "tickers", "depth", "mexc_messages", "mexc_ticker", "mexc_kline", "mexc_deal", "mexc_depth", "mexc_data"]
-    for table_name in old_tables:
+    print("Dropping system log tables to prevent storage bloat...")
+    for table in system_log_tables:
         try:
-            client.execute(f"DROP TABLE IF EXISTS {table_name}")
-            logging.info(f"Dropped existing table: {table_name}")
+            client.execute(f"DROP TABLE IF EXISTS system.{table}")
+            print(f"  Dropped system.{table}")
         except Exception as e:
-            logging.info(f"No existing table to drop: {table_name}")
+            print(f"  Could not drop system.{table}: {e}")
     
-    # Create optimized single table
-    for table_name, schema in schemas.items():
-        logging.info(f"--- Creating optimized table: {table_name} ---")
-        client.execute(schema)
-        logging.info(f"Created optimized table: {table_name}")
-    
-    # Create unified temporal sequence view for the single table
-    logging.info("--- Creating unified temporal sequence view ---")
-    
-    try:
-        client.execute("DROP VIEW IF EXISTS message_sequence")
-        message_sequence_sql = """
-        CREATE VIEW message_sequence AS
-        SELECT 
-            ts, 
-            CASE 
-                WHEN ticker != '' THEN 'ticker'
-                WHEN kline != '' THEN 'kline'
-                WHEN deal != '' THEN 'deal'
-                WHEN depth != '' THEN 'depth'
-                ELSE 'unknown'
-            END as message_type
-        FROM mexc_data
-        ORDER BY ts DESC
-        """
-        client.execute(message_sequence_sql)
-        logging.info("Created unified temporal sequence view")
-    except Exception as e:
-        logging.warning(f"Could not create message_sequence view: {e}")
-    
-    logging.info("✅ All database tables and views created successfully.")
+    client.disconnect()
 
-def main():
-    """Main function to setup ClickHouse database and tables."""
-    print("===== STARTING CLICKHOUSE SETUP =====")
+def create_database_and_table():
+    """Create pure append-only ClickHouse tables for continuous file growth."""
     
-    client = create_clickhouse_client()
-    if not client:
-        print("Aborting due to connection failure.")
-        return
+    # Connect to default database first
+    client = Client(
+        host=CLICKHOUSE_HOST,
+        port=CLICKHOUSE_PORT,
+        user=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD
+    )
     
     try:
-        create_database(client)
-        create_database_tables(client)
+        # Create database if not exists
+        print(f"Creating database '{CLICKHOUSE_DATABASE}' if not exists...")
+        client.execute(f"CREATE DATABASE IF NOT EXISTS {CLICKHOUSE_DATABASE}")
         
-        print("\n✅ ClickHouse setup completed successfully!")
-        print("Database table created with optimized single-table schema.")
-        print("Ready to receive MEXC data through client.py")
-        print("Use mexc_data table with multi-line string format for all message types")
-        print("Use message_sequence view for temporal ordering and message type identification")
+        # Switch to the database
+        client = Client(
+            host=CLICKHOUSE_HOST,
+            port=CLICKHOUSE_PORT,
+            user=CLICKHOUSE_USER,
+            password=CLICKHOUSE_PASSWORD,
+            database=CLICKHOUSE_DATABASE
+        )
+        
+        # Drop any existing tables/views for clean setup
+        print("Dropping existing tables if they exist...")
+        client.execute("DROP VIEW IF EXISTS market_data_ticker")
+        client.execute("DROP VIEW IF EXISTS market_data_deal") 
+        client.execute("DROP VIEW IF EXISTS market_data_depth")
+        client.execute(f"DROP TABLE IF EXISTS {CLICKHOUSE_BUFFER_TABLE}")
+        client.execute(f"DROP TABLE IF EXISTS {CLICKHOUSE_TABLE}")
+        client.execute("DROP TABLE IF EXISTS ticker")
+        client.execute("DROP TABLE IF EXISTS deal")
+        client.execute("DROP TABLE IF EXISTS depth")
+        client.execute("DROP TABLE IF EXISTS btc")
+        client.execute("DROP TABLE IF EXISTS eth")
+        client.execute("DROP TABLE IF EXISTS sol")
+        
+        # Create unified 3-column StripeLog tables for each symbol (pure append-only)
+        print("Creating append-only btc table (btc.bin equivalent)...")
+        client.execute("""
+        CREATE TABLE btc
+        (
+            ts DateTime64(3),
+            mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
+            m String
+        )
+        ENGINE = StripeLog
+        """)
+        
+        print("Creating append-only eth table (eth.bin equivalent)...")
+        client.execute("""
+        CREATE TABLE eth
+        (
+            ts DateTime64(3),
+            mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
+            m String
+        )
+        ENGINE = StripeLog
+        """)
+        
+        print("Creating append-only sol table (sol.bin equivalent)...")
+        client.execute("""
+        CREATE TABLE sol
+        (
+            ts DateTime64(3),
+            mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
+            m String
+        )
+        ENGINE = StripeLog
+        """)
+        
+        print("Pure append-only symbol tables created successfully!")
+        
+        # Verify setup
+        tables = client.execute("SHOW TABLES")
+        print(f"\nTables in database '{CLICKHOUSE_DATABASE}':")
+        for table in tables:
+            print(f"  - {table[0]} (StripeLog - append-only)")
+        
+        print(f"\nSetup Summary:")
+        print(f"  BTC data: btc table → btc.bin (continuous growth)")
+        print(f"  ETH data: eth table → eth.bin (continuous growth)")
+        print(f"  SOL data: sol table → sol.bin (continuous growth)")
+        print(f"  Schema: ts (timestamp), mt (message type), m (message data)")
+        print(f"  Storage: 3 pure append-only files, no parts, no merging")
+        print(f"  Architecture: Simple files that grow via appends only")
+        print("\nUnified symbol-specific database setup completed successfully!")
         
     except Exception as e:
-        logging.error(f"Setup failed: {e}", exc_info=True)
-        print(f"\n❌ Setup failed: {e}")
+        print(f"Error during setup: {e}")
+        sys.exit(1)
     finally:
-        if client:
-            client.disconnect()
-            logging.info("Disconnected from ClickHouse.")
-    
-    print("\n===== CLICKHOUSE SETUP FINISHED =====")
+        client.disconnect()
 
 if __name__ == "__main__":
-    main()
+    # Wait a bit for ClickHouse to be ready if just started
+    print("Setting up ClickHouse database...")
+    time.sleep(2)
+    
+    # First drop system log tables to prevent storage bloat
+    drop_system_log_tables()
+    
+    # Then create our database and tables
+    create_database_and_table()
