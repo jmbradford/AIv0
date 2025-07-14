@@ -9,31 +9,30 @@ A high-performance, real-time cryptocurrency data pipeline that streams live mar
 - **Zero-complexity storage**: StripeLog engine eliminates ClickHouse parts, merging, and metadata overhead
 - **Real-time persistence**: Every message immediately appended with no buffering delays
 - **Multi-instance ready**: Run separate clients for different symbols/IP tunneling requirements
-- **Ultra-low storage overhead**: Target <500MB/day for entire ClickHouse volume
 
 ### Database Architecture
 
 **Three StripeLog Tables (Append-Only):**
 ```sql
--- BTC data → /var/lib/clickhouse/data/mexc_data/btc/data.bin
+-- BTC data → /var/lib/clickhouse/store/b7c/...UUID.../data.bin
 CREATE TABLE btc (
     ts DateTime64(3),                           -- MEXC message timestamp  
     mt Enum8('t'=1, 'd'=2, 'dp'=3, 'dl'=4),   -- Message type (1 byte)
     m String                                    -- Unified message data
 ) ENGINE = StripeLog;
 
--- ETH data → /var/lib/clickhouse/data/mexc_data/eth/data.bin  
+-- ETH data → /var/lib/clickhouse/store/e74/...UUID.../data.bin  
 CREATE TABLE eth (...same schema...);
 
--- SOL data → /var/lib/clickhouse/data/mexc_data/sol/data.bin
+-- SOL data → /var/lib/clickhouse/store/507/...UUID.../data.bin
 CREATE TABLE sol (...same schema...);
 ```
 
 **Storage Pattern:**
-- **btc/data.bin**: Continuous append-only growth for all BTC_USDT messages
-- **eth/data.bin**: Continuous append-only growth for all ETH_USDT messages  
-- **sol/data.bin**: Continuous append-only growth for all SOL_USDT messages
-- **Total files**: Exactly 3 data.bin files in separate directories, no parts/metadata
+- **b7c/data.bin**: Continuous append-only growth for all BTC_USDT messages
+- **e74/data.bin**: Continuous append-only growth for all ETH_USDT messages  
+- **507/data.bin**: Continuous append-only growth for all SOL_USDT messages
+- **Total files**: Exactly 3 data.bin files in identifier-based directories (b7c=BTC, e74=ETH, 507=SOL)
 
 ### Message Format Specification
 
@@ -70,52 +69,71 @@ Purpose: Captures unknown/malformed messages for debugging
 
 ```
 /home/user/mexc-pipeline/
-├── README.md                 # This comprehensive guide
-├── requirements.txt          # Python dependencies
-├── config.py                 # Symbol configurations (BTC_CONFIG, ETH_CONFIG, SOL_CONFIG)
-├── docker-compose.yml        # ClickHouse container with optimized settings
-├── clickhouse-config.xml     # Disables system logs to prevent storage bloat
-├── ch_setup.py               # Creates symbol-specific StripeLog tables
-├── btcdat.py                 # BTC_USDT WebSocket client → btc/data.bin
-├── ethdat.py                 # ETH_USDT WebSocket client → eth/data.bin  
-├── soldat.py                 # SOL_USDT WebSocket client → sol/data.bin
-├── verif.py                  # Data verification and storage statistics
-├── CLAUDE.md                 # Development notes and behaviors
-└── venv/                     # Python virtual environment
+├── README.md                     # This comprehensive guide
+├── DEPLOYMENT.md                 # 2-command deployment instructions
+├── VPN-SETUP.md                  # VPN configuration and verification
+├── requirements.txt              # Python dependencies
+├── setup.sh                      # One-command environment setup script
+├── docker-compose.yml            # Multi-container VPN deployment with ClickHouse
+├── Dockerfile                    # VPN-enabled multi-service container
+├── .env                          # VPN credentials (create from .env.example)
+├── .env.example                  # VPN credentials template
+├── config.py                     # Symbol configurations (BTC_CONFIG, ETH_CONFIG, SOL_CONFIG)
+├── clickhouse-config-simple.xml  # Optimized ClickHouse settings for containers
+├── ch_setup.py                   # Creates symbol-specific StripeLog tables with UUID control
+├── btcdat.py                     # BTC_USDT WebSocket client → btc/data.bin (via US VPN)
+├── ethdat.py                     # ETH_USDT WebSocket client → eth/data.bin (via UK VPN)
+├── soldat.py                     # SOL_USDT WebSocket client → sol/data.bin (via CA VPN)
+├── verif.py                      # Data verification and storage statistics
+├── CLAUDE.md                     # Development notes and behaviors
+└── venv/                         # Python virtual environment (created by setup.sh)
 ```
 
 ## Complete Setup Instructions
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- Python 3.8+ with pip
+- NordVPN subscription (for VPN separation)
 - Minimum 2GB available disk space
 - Stable internet connection for WebSocket streams
 
+### 2-Command VPN Deployment
+
 ### Step 1: Environment Setup
 ```bash
-# Clone or create project directory
-mkdir mexc-pipeline && cd mexc-pipeline
-
-# Create Python virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+# Run automated setup script
+./setup.sh
 ```
+**This script automatically:**
+- ✅ Validates Docker installation
+- ✅ Creates Python virtual environment
+- ✅ Installs all dependencies
+- ✅ Downloads Docker base images
+- ✅ Validates project files
 
-### Step 2: ClickHouse Setup
+### Step 2: VPN Configuration
 ```bash
-# Start ClickHouse container (downloads ~200MB on first run)
-docker-compose up -d
-
-# Wait for ClickHouse to initialize (check with docker ps)
-sleep 10
-
-# Create symbol-specific tables and disable system logs
-python3 ch_setup.py
+# Configure your NordVPN credentials
+nano .env
 ```
+**Add your credentials:**
+```env
+NORDVPN_USER=your_nordvpn_username
+NORDVPN_PASS=your_nordvpn_password
+```
+
+### Step 3: Deploy Multi-Container System
+```bash
+# Start complete system with VPN separation
+docker-compose up -d
+```
+**This single command:**
+- 🚀 Starts ClickHouse database
+- 🛠️ Auto-runs database setup (ch_setup.py)
+- 🌐 Launches BTC client with US VPN
+- 🌐 Launches ETH client with UK VPN
+- 🌐 Launches SOL client with Canadian VPN
+- 📊 Begins real-time data collection with IP separation
 
 **Expected output:**
 ```
@@ -136,35 +154,55 @@ Setup Summary:
 
 **Option A: BTC_USDT Data Collection**
 ```bash
-python3 btcdat.py
+python3 ./btcdat.py
 ```
 
 **Option B: ETH_USDT Data Collection**  
 ```bash
-python3 ethdat.py
+python3 ./ethdat.py
 ```
 
 **Option C: SOL_USDT Data Collection**
 ```bash
-python3 soldat.py
+python3 ./soldat.py
 ```
 
 **Option D: Multi-Symbol (Run in separate terminals/screens)**
 ```bash
 # Terminal 1
-python3 btcdat.py
+python3 ./btcdat.py
 
 # Terminal 2  
-python3 ethdat.py
+python3 ./ethdat.py
 
 # Terminal 3
-python3 soldat.py
+python3 ./soldat.py
 ```
 
-### Step 4: Verification and Monitoring
+### Step 4: VPN Verification and Monitoring
 ```bash
+# Verify VPN IP separation (should show 3 different IPs)
+docker-compose exec btc-client curl -s https://ipinfo.io/ip
+docker-compose exec eth-client curl -s https://ipinfo.io/ip  
+docker-compose exec sol-client curl -s https://ipinfo.io/ip
+
 # Check data collection status
-python3 verif.py
+source venv/bin/activate && python3 verif.py
+
+# Monitor container status
+docker-compose ps
+```
+
+**Expected VPN verification output:**
+```
+# BTC Client (US VPN):
+198.54.117.xxx
+
+# ETH Client (UK VPN):  
+185.202.220.xxx
+
+# SOL Client (Canadian VPN):
+199.19.224.xxx
 ```
 
 ## Configuration Details
@@ -227,13 +265,13 @@ Deal Messages: 140 → btc/data.bin
 Depth Messages: 43 → btc/data.bin
 Skipped Messages: 0
 Errors: 0
-Rate: 12.66 records/sec
+Rate: 12.66 records/sec #varies
 ==================================================
 ```
 
 ### Storage Growth Verification
 ```bash
-python3 verif.py
+python3 ./verif.py
 ```
 
 **Expected verification output:**
@@ -262,42 +300,100 @@ STORAGE STATISTICS
 
 ### Storage Efficiency
 - **File count**: Exactly 3 data.bin files in separate directories (btc/, eth/, sol/)
-- **Growth rate**: ~200KB per symbol for 1000+ messages
 - **Volume overhead**: <4MB base + data (vs. 100s of MB with traditional ClickHouse)
-- **Target daily growth**: <500MB for entire ClickHouse volume
 - **No parts/merging**: Zero ClickHouse complexity overhead
 
 ### Throughput Metrics
 - **BTC_USDT**: ~10-15 messages/second typical
 - **ETH_USDT**: ~8-12 messages/second typical  
 - **SOL_USDT**: ~6-10 messages/second typical
-- **Insert latency**: <5ms per message (direct append)
+- **Insert latency**: <100ms per message (direct append)
 - **Disk I/O**: Minimal (pure append-only writes)
 
-## Multi-Instance Deployment
+## Multi-Instance VPN Deployment
 
-### IP Tunneling Support (Required for sub.depth.full)
-MEXC's `sub.depth.full` allows only one subscription per IP address. For multi-symbol deployment:
+### Automated VPN IP Separation (Required for sub.depth.full)
+MEXC's `sub.depth.full` allows only one subscription per IP address. This project includes **automated VPN separation** using Docker containers with NordVPN integration.
 
-**Option 1: VPN/Proxy Rotation**
+**2-Command VPN Deployment:**
 ```bash
-# Terminal 1 (Direct IP)
-python3 btcdat.py
+# Step 1: Environment setup
+./setup.sh
 
-# Terminal 2 (VPN IP 1) 
-python3 ethdat.py
+# Step 2: Configure VPN credentials in .env
+NORDVPN_USER=your_username
+NORDVPN_PASS=your_password
 
-# Terminal 3 (VPN IP 2)
-python3 soldat.py
+# Step 3: Deploy with automatic VPN separation
+docker-compose up -d
 ```
 
-**Option 2: Cloud Deployment**
-Deploy each client on separate cloud instances with different IP addresses.
+**Automatic VPN Routing:**
+- **BTC Client**: Routes through US NordVPN servers
+- **ETH Client**: Routes through UK NordVPN servers  
+- **SOL Client**: Routes through Canadian NordVPN servers
 
-**Option 3: Sequential Collection**
-Run one symbol at a time if IP limitations prevent simultaneous collection.
+**VPN Connection Verification:**
+```bash
+# Check each client's external IP (should be different)
+docker-compose exec btc-client curl -s https://ipinfo.io/ip
+docker-compose exec eth-client curl -s https://ipinfo.io/ip
+docker-compose exec sol-client curl -s https://ipinfo.io/ip
+
+# Expected output: 3 different IP addresses from US/UK/Canada
+```
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────┐
+│                Docker Network                   │
+│  ┌────────────┐    ┌─────────────────────────┐  │
+│  │ ClickHouse │◄───┤      Setup Container    │  │
+│  │ Database   │    └─────────────────────────┘  │
+│  └─────┬──────┘                                 │
+│        │                                        │
+│        ▼                                        │
+│  ┌─────────────────────────────────────────┐    │
+│  │        VPN-Separated Clients            │    │
+│  │ ┌──────────┐ ┌──────────┐ ┌──────────┐  │    │
+│  │ │BTC Client│ │ETH Client│ │SOL Client│  │    │
+│  │ │(US VPN)  │ │(UK VPN)  │ │(CA VPN)  │  │    │
+│  │ │External  │ │External  │ │External  │  │    │
+│  │ │IP: US    │ │IP: UK    │ │IP: CA    │  │    │
+│  │ └──────────┘ └──────────┘ └──────────┘  │    │
+│  └─────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────┘
+```
+
+**Legacy Options (if VPN unavailable):**
+- **Cloud Deployment**: Deploy each client on separate cloud instances
+- **Sequential Collection**: Run one symbol at a time if IP limitations prevent simultaneous collection
 
 ## Troubleshooting Guide
+
+### VPN Connection Issues
+```bash
+# Check VPN authentication status
+docker-compose logs btc-client | grep -A 5 "VPN"
+
+# Expected outputs:
+# ✅ Success: "VPN connected successfully" + different external IPs
+# ❌ Auth Failed: "VPN authentication failed - check NordVPN credentials" 
+# ⚠️  No VPN: "No VPN credentials provided, running without VPN"
+
+# Verify external IPs are different
+docker-compose exec btc-client curl -s https://ipinfo.io/ip
+docker-compose exec eth-client curl -s https://ipinfo.io/ip  
+docker-compose exec sol-client curl -s https://ipinfo.io/ip
+
+# Check VPN logs for detailed diagnostics
+docker-compose exec btc-client cat /tmp/openvpn.log
+```
+
+**Common VPN Issues:**
+- **AUTH_FAILED**: Invalid NordVPN credentials in .env file
+- **Same IPs**: VPN connection failed, all clients using host IP
+- **No VPN logs**: VPN setup skipped (check .env file exists with credentials)
 
 ### ClickHouse Connection Issues
 ```bash
@@ -363,35 +459,26 @@ sleep 10
 python3 ch_setup.py
 ```
 
-### Backup Operations
-```bash
-# Export data (while ClickHouse running)
-docker-compose exec clickhouse clickhouse-client -q "SELECT * FROM mexc_data.btc FORMAT TabSeparated" > btc_backup.tsv
-
-# Restore data (after clean setup)
-cat btc_backup.tsv | docker-compose exec -T clickhouse clickhouse-client -q "INSERT INTO mexc_data.btc FORMAT TabSeparated"
-```
-
 ## Development and Customization
 
 ### Adding New Symbols
 1. **Add configuration to config.py:**
 ```python
-ADA_CONFIG = {
-    "symbol": "ADA_USDT",
-    "table_name": "ada",
+XRP_CONFIG = {
+    "symbol": "XRP_USDT",
+    "table_name": "xrp",
     "subscriptions": [
-        {"method": "sub.ticker", "param": {"symbol": "ADA_USDT"}},
-        {"method": "sub.deal", "param": {"symbol": "ADA_USDT"}},
-        {"method": "sub.depth.full", "param": {"symbol": "ADA_USDT", "limit": 20}}
+        {"method": "sub.ticker", "param": {"symbol": "XRP_USDT"}},
+        {"method": "sub.deal", "param": {"symbol": "XRP_USDT"}},
+        {"method": "sub.depth.full", "param": {"symbol": "XRP_USDT", "limit": 20}}
     ]
 }
 ```
 
-2. **Update ch_setup.py to create ada table:**
+2. **Update ch_setup.py to create xrp table:**
 ```python
 client.execute("""
-CREATE TABLE ada (
+CREATE TABLE xrp (
     ts DateTime64(3),
     mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
     m String
@@ -399,9 +486,9 @@ CREATE TABLE ada (
 """)
 ```
 
-3. **Create adaaat.py client** (copy btcdat.py and change imports)
+3. **Create xrpdat.py client** (copy btcdat.py and change imports)
 
-4. **Update verif.py** to include ada in verification
+4. **Update verif.py** to include xrp in verification
 
 ### Message Format Modifications
 To change data extraction (e.g., add more ticker fields):
@@ -420,12 +507,6 @@ MAX_ERROR_COUNT = 100       # Shutdown threshold
 
 ## Technical Specifications
 
-### System Requirements
-- **RAM**: 512MB minimum, 1GB recommended
-- **Storage**: 1GB minimum, 10GB+ for extended collection
-- **CPU**: 1 core minimum, 2+ cores recommended for multi-symbol
-- **Network**: Stable broadband, <100ms latency to MEXC
-
 ### Dependencies
 ```txt
 websocket-client>=1.8.0     # MEXC WebSocket connection
@@ -441,51 +522,28 @@ pyarrow>=20.0.0             # Columnar data support
 - **WebSocket**: `wss://contract.mexc.com/edge`
 - **Documentation**: https://mexcdevelop.github.io/apidocs/contract_v1_en/?python#websocket-api
 - **Rate Limits**: ~1 subscription per IP for sub.depth.full
-- **Message Types**: ticker (1-2/min), deal (10-30/sec), depth (5-10/sec)
-
-## Security and Privacy
-
-### Data Collection
-- **No personal data**: Only public market data collected
-- **No API keys**: Uses public WebSocket streams  
-- **Local storage**: All data remains on your infrastructure
-- **No external transmission**: Data never sent outside your environment
-
-### Network Security
-- **Read-only access**: No trading or account access
-- **Public endpoints**: Only connects to public MEXC streams
-- **No credentials**: No authentication required for market data
-
-## License and Disclaimer
-
-This software is provided for educational and research purposes. Users are responsible for:
-- Compliance with MEXC Terms of Service
-- Appropriate use of collected market data
-- System security and maintenance
-- Data backup and recovery procedures
-
-**Investment Disclaimer**: This tool provides market data only. Not financial advice. Past performance does not guarantee future results.
-
----
+- **Message Types**: ticker (5-20/min), deal (2-30/sec), depth (2-10/sec)
 
 ## Quick Reference Commands
 
 ```bash
-# Setup
-python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
-docker-compose up -d && sleep 10 && python3 ch_setup.py
+# 2-Command VPN Deployment
+./setup.sh                    # Environment setup + dependency installation
+docker-compose up -d          # Deploy with automatic VPN separation
 
-# Run clients  
-python3 btcdat.py    # BTC data collection
-python3 ethdat.py    # ETH data collection
-python3 soldat.py    # SOL data collection
+# VPN Verification
+docker-compose exec btc-client curl -s https://ipinfo.io/ip    # Check BTC VPN IP
+docker-compose exec eth-client curl -s https://ipinfo.io/ip    # Check ETH VPN IP  
+docker-compose exec sol-client curl -s https://ipinfo.io/ip    # Check SOL VPN IP
 
 # Monitor
-python3 verif.py     # Check data and storage
+source venv/bin/activate && python3 verif.py              # Check data and storage
+docker-compose ps                                         # Container status
+docker-compose logs -f btc-client                         # VPN connection logs
 
 # Maintain
-docker-compose restart clickhouse                        # Restart database
-docker-compose down --remove-orphans --volumes          # Complete reset
+docker-compose restart btc-client                         # Restart specific client
+docker-compose down --volumes                             # Complete reset
 ```
 
-**Result**: 3 continuously growing data.bin files in organized directories (btc/, eth/, sol/) with real-time cryptocurrency market data in minimal storage footprint.
+**VPN Architecture Result**: 3 continuously growing data.bin files with real-time cryptocurrency data collected through separate VPN connections (US/UK/Canada) for MEXC API compliance.

@@ -50,9 +50,16 @@ exports/
 
 # Docker
 .dockerignore
+docker-compose.override.yml
+.docker/
+
+# Docker build cache and volumes
+docker-volume-*
+.docker-volumes/
 
 # ClickHouse Data (in case mounted locally)
 clickhouse-data/
+clickhouse_data/
 
 # Temporary Files
 *.tmp
@@ -73,6 +80,21 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# VPN credentials and sensitive configs
+.env.production
+.env.staging
+
+# VPN logs and temporary files
+vpn-configs/
+*.ovpn
+openvpn.log
+nordvpn-*.txt
+/tmp/nordvpn-auth.txt
+
+# Container logs and temporary files
+container-logs/
+*.container.log
 
 # Coverage Reports
 htmlcov/

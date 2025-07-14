@@ -13,7 +13,7 @@ def drop_system_log_tables():
         host=CLICKHOUSE_HOST,
         port=CLICKHOUSE_PORT,
         user=CLICKHOUSE_USER,
-        password=CLICKHOUSE_PASSWORD
+        password=CLICKHOUSE_PASSWORD if CLICKHOUSE_PASSWORD else ""
     )
     
     system_log_tables = [
@@ -36,12 +36,12 @@ def drop_system_log_tables():
 def create_database_and_table():
     """Create pure append-only ClickHouse tables for continuous file growth."""
     
-    # Connect to default database first
+    # Connect to default database first  
     client = Client(
         host=CLICKHOUSE_HOST,
         port=CLICKHOUSE_PORT,
         user=CLICKHOUSE_USER,
-        password=CLICKHOUSE_PASSWORD
+        password=CLICKHOUSE_PASSWORD if CLICKHOUSE_PASSWORD else ""
     )
     
     try:
@@ -54,7 +54,7 @@ def create_database_and_table():
             host=CLICKHOUSE_HOST,
             port=CLICKHOUSE_PORT,
             user=CLICKHOUSE_USER,
-            password=CLICKHOUSE_PASSWORD,
+            password=CLICKHOUSE_PASSWORD if CLICKHOUSE_PASSWORD else "",
             database=CLICKHOUSE_DATABASE
         )
         
@@ -73,9 +73,11 @@ def create_database_and_table():
         client.execute("DROP TABLE IF EXISTS sol")
         
         # Create unified 3-column StripeLog tables for each symbol (pure append-only)
-        print("Creating append-only btc table (btc.bin equivalent)...")
+        # Using specific UUIDs to control directory naming (btc=b7c, eth=e74, sol=507)
+        print("Creating append-only btc table (btc/data.bin equivalent)...")
         client.execute("""
         CREATE TABLE btc
+        UUID 'b7c00000-0000-0000-0000-000000000000'
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
@@ -84,9 +86,10 @@ def create_database_and_table():
         ENGINE = StripeLog
         """)
         
-        print("Creating append-only eth table (eth.bin equivalent)...")
+        print("Creating append-only eth table (eth/data.bin equivalent)...")
         client.execute("""
         CREATE TABLE eth
+        UUID 'e7400000-0000-0000-0000-000000000000'
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
@@ -95,9 +98,10 @@ def create_database_and_table():
         ENGINE = StripeLog
         """)
         
-        print("Creating append-only sol table (sol.bin equivalent)...")
+        print("Creating append-only sol table (sol/data.bin equivalent)...")
         client.execute("""
         CREATE TABLE sol
+        UUID '50700000-0000-0000-0000-000000000000'
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
@@ -115,9 +119,9 @@ def create_database_and_table():
             print(f"  - {table[0]} (StripeLog - append-only)")
         
         print(f"\nSetup Summary:")
-        print(f"  BTC data: btc table → btc.bin (continuous growth)")
-        print(f"  ETH data: eth table → eth.bin (continuous growth)")
-        print(f"  SOL data: sol table → sol.bin (continuous growth)")
+        print(f"  BTC data: btc table → btc/data.bin (continuous growth)")
+        print(f"  ETH data: eth table → eth/data.bin (continuous growth)")
+        print(f"  SOL data: sol table → sol/data.bin (continuous growth)")
         print(f"  Schema: ts (timestamp), mt (message type), m (message data)")
         print(f"  Storage: 3 pure append-only files, no parts, no merging")
         print(f"  Architecture: Simple files that grow via appends only")

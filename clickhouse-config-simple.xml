@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <!-- Disable ALL system logging to prevent storage bloat -->
+    <query_log remove="1"/>
+    <trace_log remove="1"/>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <part_log remove="1"/>
+    <text_log remove="1"/>
+    <asynchronous_insert_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <session_log remove="1"/>
+    <zookeeper_log remove="1"/>
+    <transaction_log remove="1"/>
+    <crash_log remove="1"/>
+    
+    <!-- Simple logging configuration -->
+    <logger>
+        <level>warning</level>
+        <console>false</console>
+    </logger>
+    
+    <!-- Allow connections without password for default user -->
+    <users>
+        <default>
+            <password></password>
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+                <ip>172.16.0.0/12</ip>
+                <ip>10.0.0.0/8</ip>
+                <ip>192.168.0.0/16</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </default>
+    </users>
+</clickhouse>
