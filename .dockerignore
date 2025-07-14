@@ -1,0 +1,103 @@
+# Exclude virtual environment (largest directory - 322MB)
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Git and version control
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+
+# Test outputs
+test-results/
+test-outputs/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Docker related (avoid recursion)
+docker-compose.override.yml
+.docker/
+docker-volume-*
+.docker-volumes/
+
+# Data directories
+data/
+backups/
+exports/
+*.tsv
+*.csv
+*.parquet
+clickhouse-data/
+clickhouse_data/
+
+# Legacy VPN files (no longer used)
+vpn-configs/
+*.ovpn
+openvpn.log
+nordvpn-*.txt
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+# Container logs
+container-logs/
+*.container.log
+
+# Documentation build artifacts
+*.md.backup
