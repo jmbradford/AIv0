@@ -35,15 +35,21 @@ def connect_with_retry(max_retries=3):
 def verify_tables_exist(client):
     """Verify required symbol-specific tables exist."""
     try:
-        btc_exists = client.execute("EXISTS TABLE btc")[0][0]
-        eth_exists = client.execute("EXISTS TABLE eth")[0][0]
-        sol_exists = client.execute("EXISTS TABLE sol")[0][0]
+        btc_exists = client.execute("EXISTS TABLE btc_current")[0][0]
+        eth_exists = client.execute("EXISTS TABLE eth_current")[0][0]
+        sol_exists = client.execute("EXISTS TABLE sol_current")[0][0]
+        export_log_exists = client.execute("EXISTS TABLE export_log")[0][0]
         
         if not (btc_exists and eth_exists and sol_exists):
-            print(f"❌ Symbol tables missing - run setup_database.py first")
+            print(f"❌ Current symbol tables missing - run setup_database.py first")
             return False
             
-        print(f"✅ Symbol tables exist: btc.bin, eth.bin, sol.bin")
+        if not export_log_exists:
+            print(f"⚠️  Export log table missing - hourly exports may not work")
+            
+        print(f"✅ Current symbol tables exist: btc_current, eth_current, sol_current")
+        if export_log_exists:
+            print(f"✅ Export log table exists: export_log")
         return True
         
     except Exception as e:
@@ -72,20 +78,20 @@ def verify_data():
         # Check symbol-specific file sizes
         print("💾 Symbol-specific storage status:")
         
-        # Get counts from each symbol table
-        btc_count = client.execute("SELECT COUNT(*) FROM btc")[0][0]
-        eth_count = client.execute("SELECT COUNT(*) FROM eth")[0][0] 
-        sol_count = client.execute("SELECT COUNT(*) FROM sol")[0][0]
+        # Get counts from each current symbol table
+        btc_count = client.execute("SELECT COUNT(*) FROM btc_current")[0][0]
+        eth_count = client.execute("SELECT COUNT(*) FROM eth_current")[0][0] 
+        sol_count = client.execute("SELECT COUNT(*) FROM sol_current")[0][0]
         total_count = btc_count + eth_count + sol_count
         
-        print(f"\nTotal records appended: {total_count}")
-        print(f"  btc.bin: {btc_count} records")
-        print(f"  eth.bin: {eth_count} records")
-        print(f"  sol.bin: {sol_count} records")
+        print(f"\nTotal records in current tables: {total_count}")
+        print(f"  btc_current: {btc_count} records")
+        print(f"  eth_current: {eth_count} records")
+        print(f"  sol_current: {sol_count} records")
         
         # Get counts by message type for each symbol
         print("\nRecords by symbol and message type:")
-        for symbol_table in ['btc', 'eth', 'sol']:
+        for symbol_table in ['btc_current', 'eth_current', 'sol_current']:
             try:
                 type_counts = client.execute(f"""
                     SELECT mt, COUNT(*) as count 
@@ -95,19 +101,22 @@ def verify_data():
                 """)
                 
                 symbol_total = sum([count for _, count in type_counts])
-                print(f"  {symbol_table.upper()}: {symbol_total} total")
+                symbol_name = symbol_table.replace('_current', '').upper()
+                print(f"  {symbol_name}: {symbol_total} total")
                 for msg_type, count in type_counts:
                     print(f"    {msg_type}: {count}")
             except Exception as e:
-                print(f"  {symbol_table.upper()}: No data yet")
+                symbol_name = symbol_table.replace('_current', '').upper()
+                print(f"  {symbol_name}: No data yet")
         
         # Show last 3 ticker messages from each symbol
         print("\n" + "-"*80)
         print("LAST 3 TICKER MESSAGES (BY SYMBOL)")
         print("-"*80)
         
-        for symbol_table in ['btc', 'eth', 'sol']:
-            print(f"\n{symbol_table.upper()} Ticker Messages:")
+        for symbol_table in ['btc_current', 'eth_current', 'sol_current']:
+            symbol_name = symbol_table.replace('_current', '').upper()
+            print(f"\n{symbol_name} Ticker Messages:")
             try:
                 ticker_data = client.execute(f"""
                     SELECT ts, m
@@ -132,8 +141,9 @@ def verify_data():
         print("LAST 3 DEAL MESSAGES (BY SYMBOL)")
         print("-"*80)
         
-        for symbol_table in ['btc', 'eth', 'sol']:
-            print(f"\n{symbol_table.upper()} Deal Messages:")
+        for symbol_table in ['btc_current', 'eth_current', 'sol_current']:
+            symbol_name = symbol_table.replace('_current', '').upper()
+            print(f"\n{symbol_name} Deal Messages:")
             try:
                 deal_data = client.execute(f"""
                     SELECT ts, m
@@ -158,8 +168,9 @@ def verify_data():
         print("LAST 3 DEPTH MESSAGES (BY SYMBOL)")
         print("-"*80)
         
-        for symbol_table in ['btc', 'eth', 'sol']:
-            print(f"\n{symbol_table.upper()} Depth Messages:")
+        for symbol_table in ['btc_current', 'eth_current', 'sol_current']:
+            symbol_name = symbol_table.replace('_current', '').upper()
+            print(f"\n{symbol_name} Depth Messages:")
             try:
                 depth_data = client.execute(f"""
                     SELECT ts, m
@@ -185,6 +196,30 @@ def verify_data():
             except Exception as e:
                 print(f"  Error: {e}")
         
+        # Export log verification
+        print("\n" + "-"*80)
+        print("EXPORT LOG VERIFICATION")
+        print("-"*80)
+        
+        try:
+            export_stats = client.execute("""
+                SELECT symbol, COUNT(*) as exported_hours, 
+                       MIN(hour_start) as first_export,
+                       MAX(hour_start) as last_export
+                FROM export_log 
+                GROUP BY symbol
+                ORDER BY symbol
+            """)
+            
+            if export_stats:
+                print("  Hourly exports completed:")
+                for symbol, count, first, last in export_stats:
+                    print(f"    {symbol.upper()}: {count} hours exported (first: {first}, last: {last})")
+            else:
+                print("  No exports completed yet")
+        except Exception as e:
+            print(f"  Export log check failed: {e}")
+        
         # Storage statistics - symbol-specific files
         print("\n" + "-"*80)
         print("STORAGE STATISTICS")
@@ -193,6 +228,8 @@ def verify_data():
         print("  Symbol-specific append-only architecture: StripeLog tables")
         print("  Files grow continuously with no parts or merging")
         print("  Schema: ts (timestamp), mt (message type), m (message data)")
+        print("  Tables: btc_current, eth_current, sol_current (active data)")
+        print("  Export: export_log (tracks hourly parquet exports)")
         
         # Check Docker volume size growth
         try:
@@ -207,7 +244,7 @@ def verify_data():
         
         # Show individual symbol file info
         try:
-            for symbol in ['btc', 'eth', 'sol']:
+            for symbol in ['btc_current', 'eth_current', 'sol_current']:
                 file_result = subprocess.run(['docker', 'exec', 'mexc-clickhouse', 'find', 
                                             f'/var/lib/clickhouse/data/{CLICKHOUSE_DATABASE}/{symbol}/', 
                                             '-name', '*.bin', '-exec', 'du', '-h', '{}', ';'], 
@@ -217,14 +254,42 @@ def verify_data():
                     for line in lines:
                         if 'data.bin' in line:
                             size = line.split('\t')[0]
-                            print(f"  {symbol}.bin: {size}")
+                            symbol_name = symbol.replace('_current', '')
+                            print(f"  {symbol_name}.bin: {size}")
                 else:
-                    print(f"  {symbol}.bin: File not found yet")
+                    symbol_name = symbol.replace('_current', '')
+                    print(f"  {symbol_name}.bin: File not found yet")
         except Exception:
             print("  Individual file sizes: Unable to check")
         
+        # Show export directory if it exists
+        try:
+            export_result = subprocess.run(['ls', '-la', 'exports/'], 
+                                          capture_output=True, text=True)
+            if export_result.returncode == 0:
+                print("\n  Export directory contents:")
+                lines = export_result.stdout.strip().split('\n')
+                parquet_files = [line for line in lines if '.parquet' in line]
+                if parquet_files:
+                    print(f"    {len(parquet_files)} parquet files found")
+                    # Show last few exports
+                    for line in parquet_files[-3:]:
+                        parts = line.split()
+                        if len(parts) >= 9:
+                            filename = parts[-1]
+                            size = parts[4]
+                            print(f"      {filename} ({size} bytes)")
+                else:
+                    print("    No parquet files found")
+        except Exception:
+            print("  Export directory: Unable to check")
+        
         print("\n" + "="*80)
         print("Verification completed successfully!")
+        print("\nNote: This verification checks the new table structure:")
+        print("  - btc_current, eth_current, sol_current (active data)")
+        print("  - export_log (tracks hourly parquet exports)")
+        print("  - Hourly rotation exports data to parquet files")
         
     except Exception as e:
         print(f"❌ Error during verification: {e}")
