@@ -1,28 +1,38 @@
 #!/bin/bash
 
-# MEXC Data Verification Script
-# Automatically connects to localhost ClickHouse from host
+# MEXC Complete Verification Script
+# Tests both IP separation and data collection
 
-echo "🔍 MEXC Multi-Symbol Data Verification"
-echo "====================================="
+echo "🔍 MEXC Complete System Verification"
+echo "===================================="
 echo ""
+
+# First run IP separation test
+echo "1️⃣ Testing IP separation..."
+./iptest
+
+echo ""
+echo "2️⃣ Testing data collection..."
 
 # Activate virtual environment
 if [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
     echo "✅ Virtual environment activated"
 else
-    echo "❌ Virtual environment not found. Run ./setup.sh first"
+    echo "❌ Virtual environment not found. Run ./setup first"
     exit 1
 fi
 
 # Set ClickHouse host to localhost for host-side verification
 export CLICKHOUSE_HOST=localhost
 
-# Run verification
-echo "🚀 Running verification with localhost connection..."
+# Run data verification
+echo "🚀 Running data verification with localhost connection..."
 echo ""
 python3 verify_data.py
 
 echo ""
-echo "💡 Note: Use 'CLICKHOUSE_HOST=localhost python3 verify_data.py' for manual verification"
+echo "💡 Individual test scripts:"
+echo "  - IP separation only: ./iptest"
+echo "  - Data verification only: ./verif"
+echo "  - Complete verification: ./verify (this script)"

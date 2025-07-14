@@ -39,7 +39,7 @@ docker-compose up -d
 │         │                                                  │
 │         ▼                                                  │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │              IP-Separated Clients                   │   │
+│  │          Tor Proxy IP-Separated Clients             │   │
 │  │                                                     │   │
 │  │ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐  │   │
 │  │ │  BTC Client  │ │  ETH Client  │ │  SOL Client  │  │   │
@@ -173,8 +173,12 @@ Setup Summary:
 
 ### Data Collection Verification
 ```bash
-# Simple verification (recommended)
+# Complete verification (recommended) - IP separation + data verification
 ./verify
+
+# Individual verification options
+./iptest     # IP separation verification only
+./verif      # Data verification only
 
 # Manual verification with environment override
 source venv/bin/activate && CLICKHOUSE_HOST=localhost python3 verify_data.py
@@ -445,7 +449,9 @@ mexc-pipeline/
 ./setup && docker-compose up -d
 
 # Verify everything is working
-./verify
+./verify      # Complete verification (IP + data)
+./iptest      # IP separation only
+./verif       # Data verification only
 
 # Monitor real-time data collection
 docker-compose logs -f btc-client

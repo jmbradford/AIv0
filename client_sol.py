@@ -46,7 +46,7 @@ class SolDataPipeline:
             table_exists = self.ch_client.execute(f"EXISTS TABLE {self.table_name}")[0][0]
             
             if not table_exists:
-                print(f"❌ Table {self.table_name} missing - run ch_setup.py first")
+                print(f"❌ Table {self.table_name} missing - run setup_database.py first")
                 return False
                 
             print(f"✅ Connected to ClickHouse - {self.symbol} append-only mode ready")

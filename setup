@@ -213,4 +213,4 @@ print_status "Setup completed successfully!"
 print_status "Run 'docker-compose up -d' to start deployment"
 
 echo ""
-echo "📖 For troubleshooting, see VPN-SETUP.md"
+echo "📖 For troubleshooting, see README.md"

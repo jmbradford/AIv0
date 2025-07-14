@@ -40,7 +40,7 @@ def verify_tables_exist(client):
         sol_exists = client.execute("EXISTS TABLE sol")[0][0]
         
         if not (btc_exists and eth_exists and sol_exists):
-            print(f"❌ Symbol tables missing - run ch_setup.py first")
+            print(f"❌ Symbol tables missing - run setup_database.py first")
             return False
             
         print(f"✅ Symbol tables exist: btc.bin, eth.bin, sol.bin")
@@ -50,79 +50,8 @@ def verify_tables_exist(client):
         print(f"❌ Error checking tables: {e}")
         return False
 
-def verify_container_ips():
-    """Verify that each container is using a different IP address."""
-    import subprocess
-    
-    print("\n" + "="*80)
-    print("IP SEPARATION VERIFICATION")
-    print("="*80)
-    
-    containers = ['mexc-btc-client', 'mexc-eth-client', 'mexc-sol-client']
-    container_ips = {}
-    
-    for container in containers:
-        try:
-            # Check if container is running first
-            result = subprocess.run(['docker', 'ps', '--filter', f'name={container}', '--format', '{{.Names}}'], 
-                                  capture_output=True, text=True)
-            if container not in result.stdout:
-                print(f"  {container}: Not running")
-                continue
-                
-            # Get the container's IP as seen by MEXC (via proxy)
-            ip_result = subprocess.run([
-                'docker', 'exec', container, 'timeout', '10', 
-                'curl', '--socks4', '127.0.0.1:9050', '-s', 'https://ipinfo.io/ip'
-            ], capture_output=True, text=True)
-            
-            if ip_result.returncode == 0 and ip_result.stdout.strip():
-                ip = ip_result.stdout.strip()
-                container_ips[container] = ip
-                
-                # Get location info
-                loc_result = subprocess.run([
-                    'docker', 'exec', container, 'timeout', '10',
-                    'curl', '--socks4', '127.0.0.1:9050', '-s', f'https://ipinfo.io/{ip}'
-                ], capture_output=True, text=True)
-                
-                location = "Unknown"
-                if loc_result.returncode == 0:
-                    try:
-                        import json
-                        loc_data = json.loads(loc_result.stdout)
-                        location = f"{loc_data.get('city', 'Unknown')}, {loc_data.get('country', 'Unknown')}"
-                    except:
-                        location = "Unknown"
-                
-                symbol = container.split('-')[1].upper()
-                print(f"  {symbol} Container ({container}):")
-                print(f"    IP: {ip}")
-                print(f"    Location: {location}")
-                
-            else:
-                print(f"  {container}: Failed to get IP")
-                
-        except Exception as e:
-            print(f"  {container}: Error checking IP - {e}")
-    
-    # Verify IPs are different
-    unique_ips = set(container_ips.values())
-    if len(unique_ips) == len(container_ips) and len(container_ips) >= 2:
-        print(f"\n✅ IP Separation Success: {len(unique_ips)} unique IPs detected")
-        print("   Each container appears to MEXC with a different IP address")
-    elif len(container_ips) == 0:
-        print("\n❌ No container IPs could be verified")
-    else:
-        print(f"\n⚠️  Warning: {len(unique_ips)} unique IPs from {len(container_ips)} containers")
-        if len(unique_ips) < len(container_ips):
-            print("   Some containers may share IP addresses")
-
 def verify_data():
     """Verify data in ClickHouse by showing last 3 entries of each type."""
-    
-    # First verify container IP separation
-    verify_container_ips()
     
     # Connect with retry logic
     client = connect_with_retry()
@@ -132,7 +61,7 @@ def verify_data():
         
     # Verify tables exist
     if not verify_tables_exist(client):
-        print("❌ Required tables missing - run ch_setup.py first")
+        print("❌ Required tables missing - run setup_database.py first")
         sys.exit(1)
     
     try:
@@ -302,7 +231,7 @@ def verify_data():
         if "Connection refused" in str(e):
             print("💡 Hint: Is ClickHouse container running? Try: docker-compose up -d")
         elif "doesn't exist" in str(e):
-            print("💡 Hint: Tables missing? Try: python ch_setup.py")
+            print("💡 Hint: Tables missing? Try: python setup_database.py")
         sys.exit(1)
     finally:
         if client:
