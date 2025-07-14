@@ -139,6 +139,28 @@ services:
       retries: 3
       start_period: 60s
 
+  # Hourly data exporter service
+  exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mexc-exporter
+    environment:
+      - CONTAINER_TYPE=exporter
+      - CLICKHOUSE_HOST=clickhouse
+    volumes:
+      - ./exports:/exports  # Mount local exports directory
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For container monitoring
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    command: python3 hourly_exporter.py
+    networks:
+      - mexc-network
+    restart: unless-stopped
+
 volumes:
   clickhouse_data:
     driver: local

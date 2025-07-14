@@ -49,6 +49,17 @@ docker-compose up -d
 │  │ │ Unique Loc 1 │ │ Unique Loc 2 │ │ Unique Loc 3 │  │   │
 │  │ └──────────────┘ └──────────────┘ └──────────────┘  │   │
 │  └─────────────────────────────────────────────────────┘   │
+│                                                            │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │            Hourly Data Exporter                     │   │
+│  │  ┌────────────────────────────────────────────────┐  │   │
+│  │  │         hourly_exporter.py                     │  │   │
+│  │  │  • Monitors container uptime                   │  │   │
+│  │  │  • Exports complete hours to Parquet           │  │   │
+│  │  │  • Tracks exports in export_log table          │  │   │
+│  │  │  • Outputs to ./exports/ directory             │  │   │
+│  │  └────────────────────────────────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────┘
                                │
                                ▼
@@ -170,6 +181,34 @@ Setup Summary:
 ```
 
 ## Monitoring and Verification
+
+### Hourly Data Export
+
+The system includes an automatic hourly data export service that:
+- Monitors container uptime to ensure complete hours of data
+- Exports data to Parquet files on the hour (e.g., at 12:01 for 11:00-12:00 data)
+- Only exports if the container ran continuously for the entire hour
+- Saves exports to `./exports/` directory with naming: `{symbol}_YYYYMMDD_HH00.parquet`
+- Tracks exported hours in `export_log` table to prevent duplicates
+
+**Export File Examples:**
+```
+exports/btc_20250714_1100.parquet  # BTC data from 11:00-12:00 on 2025-07-14
+exports/eth_20250714_1200.parquet  # ETH data from 12:00-13:00 on 2025-07-14
+exports/sol_20250714_1300.parquet  # SOL data from 13:00-14:00 on 2025-07-14
+```
+
+**Monitor Export Service:**
+```bash
+# View export logs
+docker-compose logs -f exporter
+
+# Check exported files
+ls -la ./exports/
+
+# Manually trigger export for testing
+docker exec mexc-exporter python3 hourly_exporter.py --once
+```
 
 ### Data Collection Verification
 ```bash
@@ -438,7 +477,10 @@ mexc-pipeline/
 ├── client_sol.py            # SOL WebSocket client
 ├── verify_data.py           # Host-side data verification
 ├── requirements.txt         # Python dependencies
+├── hourly_exporter.py       # Hourly data export service
+├── test_exporter.py         # Manual export test script
 ├── CLAUDE.md                # Development notes
+├── exports/                 # Exported Parquet files
 └── venv/                    # Python virtual environment
 ```
 

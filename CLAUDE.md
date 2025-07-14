@@ -27,6 +27,7 @@ mexc-setup          → Database initialization (runs once)
 mexc-btc-client     → BTC data collection with Tor proxy #1
 mexc-eth-client     → ETH data collection with Tor proxy #2  
 mexc-sol-client     → SOL data collection with Tor proxy #3
+mexc-exporter       → Hourly data export service with uptime monitoring
 ```
 
 ### IP Separation Implementation
@@ -46,6 +47,17 @@ CREATE TABLE btc (
 
 -- Same for eth, sol tables
 -- Result: 3 continuously growing .bin files
+
+-- Export tracking table
+CREATE TABLE export_log (
+    symbol String,
+    hour_start DateTime,
+    export_time DateTime,
+    filepath String,
+    row_count UInt64
+) ENGINE = MergeTree()
+ORDER BY (symbol, hour_start)
+PARTITION BY toYYYYMM(hour_start);
 ```
 
 ### Message Processing Pipeline
@@ -135,6 +147,41 @@ btc-client:
 ```
 
 ## Verification and Monitoring
+
+### Hourly Data Export System
+
+The `mexc-exporter` service provides automated hourly data exports with container uptime verification:
+
+#### Features:
+- **Container Uptime Monitoring**: Checks if client containers ran continuously for complete hours
+- **Hourly Exports**: Runs 1 minute after each hour (e.g., 12:01 for 11:00-12:00 data)
+- **Parquet Format**: Exports to compressed Parquet files for efficient storage and analysis
+- **Duplicate Prevention**: Tracks exported hours in `export_log` table
+- **Data Integrity**: Verifies export completeness before marking as processed
+
+#### Export Logic:
+```python
+for each symbol (btc, eth, sol):
+    if container ran full hour (11:00-12:00):
+        if hour not already exported:
+            export data to parquet file
+            verify export integrity
+            record in export_log table
+```
+
+#### File Naming Convention:
+```
+{symbol}_{YYYYMMDD}_{HH}00.parquet
+Examples:
+- btc_20250714_1100.parquet
+- eth_20250714_1200.parquet
+- sol_20250714_1300.parquet
+```
+
+#### Important Notes:
+- StripeLog tables are append-only (no DELETE support)
+- Exported data remains in ClickHouse but is tracked as exported
+- Future enhancement: Periodic table rotation for space management
 
 ### Verification Scripts
 - **`./verify`**: Complete verification (IP separation + data collection)

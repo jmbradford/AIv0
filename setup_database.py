@@ -110,7 +110,23 @@ def create_database_and_table():
         ENGINE = StripeLog
         """)
         
-        print("Pure append-only symbol tables created successfully!")
+        # Create export tracking table for hourly exports
+        print("Creating export tracking table...")
+        client.execute("""
+        CREATE TABLE IF NOT EXISTS export_log
+        (
+            symbol String,
+            hour_start DateTime,
+            export_time DateTime,
+            filepath String,
+            row_count UInt64
+        )
+        ENGINE = MergeTree()
+        ORDER BY (symbol, hour_start)
+        PARTITION BY toYYYYMM(hour_start)
+        """)
+        
+        print("Pure append-only symbol tables and export tracking created successfully!")
         
         # Verify setup
         tables = client.execute("SHOW TABLES")
