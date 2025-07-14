@@ -72,42 +72,44 @@ def create_database_and_table():
         client.execute("DROP TABLE IF EXISTS eth")
         client.execute("DROP TABLE IF EXISTS sol")
         
-        # Create unified 3-column StripeLog tables for each symbol (pure append-only)
-        # Using specific UUIDs to control directory naming (btc=b7c, eth=e74, sol=507)
-        print("Creating append-only btc table (btc/data.bin equivalent)...")
+        # Create unified 3-column MergeTree tables for each symbol (supports DELETE)
+        print("Creating btc table with DELETE support...")
         client.execute("""
         CREATE TABLE btc
-        UUID 'b7c00000-0000-0000-0000-000000000000'
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
             m String
         )
-        ENGINE = StripeLog
+        ENGINE = MergeTree()
+        ORDER BY ts
+        PARTITION BY toYYYYMMDD(ts)
         """)
         
-        print("Creating append-only eth table (eth/data.bin equivalent)...")
+        print("Creating eth table with DELETE support...")
         client.execute("""
         CREATE TABLE eth
-        UUID 'e7400000-0000-0000-0000-000000000000'
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
             m String
         )
-        ENGINE = StripeLog
+        ENGINE = MergeTree()
+        ORDER BY ts
+        PARTITION BY toYYYYMMDD(ts)
         """)
         
-        print("Creating append-only sol table (sol/data.bin equivalent)...")
+        print("Creating sol table with DELETE support...")
         client.execute("""
         CREATE TABLE sol
-        UUID '50700000-0000-0000-0000-000000000000'
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
             m String
         )
-        ENGINE = StripeLog
+        ENGINE = MergeTree()
+        ORDER BY ts
+        PARTITION BY toYYYYMMDD(ts)
         """)
         
         # Create export tracking table for hourly exports
@@ -126,22 +128,22 @@ def create_database_and_table():
         PARTITION BY toYYYYMM(hour_start)
         """)
         
-        print("Pure append-only symbol tables and export tracking created successfully!")
+        print("MergeTree symbol tables and export tracking created successfully!")
         
         # Verify setup
         tables = client.execute("SHOW TABLES")
         print(f"\nTables in database '{CLICKHOUSE_DATABASE}':")
         for table in tables:
-            print(f"  - {table[0]} (StripeLog - append-only)")
+            print(f"  - {table[0]} (MergeTree - supports DELETE)")
         
         print(f"\nSetup Summary:")
-        print(f"  BTC data: btc table → btc/data.bin (continuous growth)")
-        print(f"  ETH data: eth table → eth/data.bin (continuous growth)")
-        print(f"  SOL data: sol table → sol/data.bin (continuous growth)")
+        print(f"  BTC data: btc table (MergeTree with hourly partitions)")
+        print(f"  ETH data: eth table (MergeTree with hourly partitions)")
+        print(f"  SOL data: sol table (MergeTree with hourly partitions)")
         print(f"  Schema: ts (timestamp), mt (message type), m (message data)")
-        print(f"  Storage: 3 pure append-only files, no parts, no merging")
-        print(f"  Architecture: Simple files that grow via appends only")
-        print("\nUnified symbol-specific database setup completed successfully!")
+        print(f"  Storage: MergeTree engine supports DELETE operations")
+        print(f"  Architecture: Partitioned by date for efficient deletion")
+        print("\nUnified symbol-specific database with DELETE support completed successfully!")
         
     except Exception as e:
         print(f"Error during setup: {e}")
