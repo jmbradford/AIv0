@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# MEXC Multi-Symbol VPN Deployment - Complete Setup Script
+# MEXC Multi-Symbol Proxy Deployment - Complete Setup Script
 # Usage: ./setup.sh
 # Requires: Docker, Docker Compose, Linux
 
@@ -116,25 +116,10 @@ fi
 pip install -r requirements.txt
 print_status "Python dependencies installed"
 
-# Create .env file if it doesn't exist
+# No .env file needed for proxy-based setup
 echo ""
-echo "🔧 Setting up configuration..."
-
-if [ ! -f ".env" ]; then
-    print_warning "No .env file found, creating from template"
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-        print_status ".env file created from template"
-        echo ""
-        print_warning "IMPORTANT: Edit .env file with your NordVPN credentials before running docker-compose up"
-        echo "           Your NordVPN username and password are required for VPN functionality"
-    else
-        print_error ".env.example not found"
-        exit 1
-    fi
-else
-    print_status ".env file already exists"
-fi
+echo "🔧 Configuration validation..."
+print_status "No additional configuration required - using Tor proxy separation"
 
 # Validate required files
 echo ""
@@ -143,13 +128,13 @@ echo "📋 Validating project files..."
 required_files=(
     "docker-compose.yml"
     "Dockerfile"
-    "clickhouse-config-simple.xml"
+    "clickhouse.xml"
     "config.py"
-    "ch_setup.py"
-    "btcdat.py"
-    "ethdat.py"
-    "soldat.py"
-    "verif.py"
+    "setup_database.py"
+    "client_btc.py"
+    "client_eth.py"
+    "client_sol.py"
+    "verify_data.py"
 )
 
 for file in "${required_files[@]}"; do
@@ -165,9 +150,9 @@ print_status "All required files present"
 echo ""
 echo "🗄️  Validating ClickHouse configuration..."
 
-if [ -f "clickhouse-config-simple.xml" ]; then
+if [ -f "clickhouse.xml" ]; then
     # Basic XML validation
-    if python3 -c "import xml.etree.ElementTree as ET; ET.parse('clickhouse-config-simple.xml')" 2>/dev/null; then
+    if python3 -c "import xml.etree.ElementTree as ET; ET.parse('clickhouse.xml')" 2>/dev/null; then
         print_status "ClickHouse configuration is valid XML"
     else
         print_error "ClickHouse configuration has invalid XML syntax"
@@ -209,28 +194,19 @@ echo "✅ Docker images: Pre-downloaded"
 echo "✅ Project structure: Complete"
 echo ""
 
-# Check .env file status
-if grep -q "your_nordvpn_username" .env 2>/dev/null; then
-    print_warning "⚠️  .env file contains placeholder values"
-    echo "     Edit .env with your actual NordVPN credentials before deployment"
-    echo ""
-fi
-
 # Final instructions
 echo "🎯 Next Steps"
 echo "============="
 echo ""
-echo "1. Edit .env file with your NordVPN credentials:"
-echo "   nano .env"
-echo ""
-echo "2. Start the complete multi-symbol VPN deployment:"
+echo "1. Start the complete multi-symbol proxy deployment:"
 echo "   docker-compose up -d"
 echo ""
-echo "3. Monitor the deployment:"
+echo "2. Monitor the deployment:"
 echo "   docker-compose logs -f"
 echo ""
-echo "4. Verify data collection:"
-echo "   source venv/bin/activate && python3 verif.py"
+echo "3. Verify data collection (each container uses different IP via Tor proxy):"
+echo "   ./verify"
+echo "   # OR manually: source venv/bin/activate && CLICKHOUSE_HOST=localhost python3 verify_data.py"
 echo ""
 
 print_status "Setup completed successfully!"

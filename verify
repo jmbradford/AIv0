@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# MEXC Data Verification Script
+# Automatically connects to localhost ClickHouse from host
+
+echo "🔍 MEXC Multi-Symbol Data Verification"
+echo "====================================="
+echo ""
+
+# Activate virtual environment
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+    echo "✅ Virtual environment activated"
+else
+    echo "❌ Virtual environment not found. Run ./setup.sh first"
+    exit 1
+fi
+
+# Set ClickHouse host to localhost for host-side verification
+export CLICKHOUSE_HOST=localhost
+
+# Run verification
+echo "🚀 Running verification with localhost connection..."
+echo ""
+python3 verify_data.py
+
+echo ""
+echo "💡 Note: Use 'CLICKHOUSE_HOST=localhost python3 verify_data.py' for manual verification"

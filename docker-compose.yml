@@ -7,7 +7,7 @@ services:
       - "9000:9000"  # Native client interface
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse-config-simple.xml:/etc/clickhouse-server/config.d/custom-config.xml:ro
+      - ./clickhouse.xml:/etc/clickhouse-server/config.d/custom-config.xml:ro
     environment:
       CLICKHOUSE_DB: mexc_data
       CLICKHOUSE_USER: default
@@ -24,7 +24,9 @@ services:
 
   # Database setup service - runs once to initialize tables
   setup:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mexc-setup
     environment:
       - CONTAINER_TYPE=setup
@@ -32,23 +34,20 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-    command: python3 ch_setup.py
+    command: python3 setup_database.py
     networks:
       - mexc-network
     restart: "no"  # Only run once
 
-  # BTC client with VPN - for testing single client first
+  # BTC client with proxy separation
   btc-client:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mexc-btc-client
     environment:
       - CONTAINER_TYPE=btc-client
       - CLICKHOUSE_HOST=clickhouse
-      # VPN Configuration (configure these with your NordVPN credentials)
-      - NORDVPN_USER=${NORDVPN_USER:-}
-      - NORDVPN_PASS=${NORDVPN_PASS:-}
-      - NORDVPN_COUNTRY=United_States
-      - NORDVPN_PROTOCOL=nordlynx
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -62,7 +61,7 @@ services:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
-    command: python3 btcdat.py
+    command: python3 client_btc.py
     networks:
       - mexc-network
     restart: unless-stopped
@@ -74,17 +73,15 @@ services:
       retries: 3
       start_period: 60s
 
-  # ETH client with UK VPN
+  # ETH client with proxy separation
   eth-client:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mexc-eth-client
     environment:
       - CONTAINER_TYPE=eth-client
       - CLICKHOUSE_HOST=clickhouse
-      - NORDVPN_USER=${NORDVPN_USER:-}
-      - NORDVPN_PASS=${NORDVPN_PASS:-}
-      - NORDVPN_COUNTRY=United_Kingdom
-      - NORDVPN_PROTOCOL=nordlynx
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -98,7 +95,7 @@ services:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
-    command: python3 ethdat.py
+    command: python3 client_eth.py
     networks:
       - mexc-network
     restart: unless-stopped
@@ -109,17 +106,15 @@ services:
       retries: 3
       start_period: 60s
 
-  # SOL client with Canadian VPN
+  # SOL client with proxy separation
   sol-client:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mexc-sol-client
     environment:
       - CONTAINER_TYPE=sol-client
       - CLICKHOUSE_HOST=clickhouse
-      - NORDVPN_USER=${NORDVPN_USER:-}
-      - NORDVPN_PASS=${NORDVPN_PASS:-}
-      - NORDVPN_COUNTRY=Canada
-      - NORDVPN_PROTOCOL=nordlynx
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -133,7 +128,7 @@ services:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
-    command: python3 soldat.py
+    command: python3 client_sol.py
     networks:
       - mexc-network
     restart: unless-stopped

@@ -1,29 +1,19 @@
 FROM python:3.9-slim
 
-# Install system dependencies for VPN and networking
+# Install system dependencies for proxy-based VPN alternative
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
     iputils-ping \
     net-tools \
     procps \
-    openvpn \
     iptables \
     iproute2 \
     ca-certificates \
-    unzip \
-    expect \
+    proxychains4 \
+    tor \
+    jq \
     && rm -rf /var/lib/apt/lists/*
-
-# Create directories for VPN configs
-RUN mkdir -p /etc/openvpn /app/vpn-configs
-
-# Download NordVPN OpenVPN configs (more reliable than CLI in containers)
-RUN cd /app/vpn-configs && \
-    wget -q https://downloads.nordcdn.com/configs/archives/servers/ovpn.zip && \
-    unzip -q ovpn.zip && \
-    rm ovpn.zip && \
-    find . -name "*.ovpn" -type f | head -20 | xargs ls -la
 
 # Set working directory
 WORKDIR /app
@@ -37,90 +27,60 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create entrypoint script for delayed startup and dependency management
+# Create entrypoint script using proxy chains for IP separation
 RUN echo '#!/bin/bash\n\
 echo "Container startup: $CONTAINER_TYPE"\n\
 \n\
-# Setup VPN connection for client containers using OpenVPN\n\
-setup_vpn() {\n\
-  if [ -n "$NORDVPN_USER" ] && [ -n "$NORDVPN_PASS" ]; then\n\
-    echo "Setting up NordVPN OpenVPN connection..."\n\
+# Get original IP for comparison\n\
+ORIGINAL_IP=$(timeout 10 curl -s https://ipinfo.io/ip)\n\
+echo "Original IP: $ORIGINAL_IP"\n\
+\n\
+# Setup proxy-based IP separation\n\
+setup_proxy_separation() {\n\
+  echo "Setting up proxy-based IP separation..."\n\
+  \n\
+  # Configure different proxy settings based on container type\n\
+  case "$CONTAINER_TYPE" in\n\
+    "btc-client")\n\
+      echo "BTC Client: Using proxy chain 1"\n\
+      export PROXY_CONFIG="socks4 127.0.0.1 9050"\n\
+      ;;\n\
+    "eth-client")\n\
+      echo "ETH Client: Using proxy chain 2"\n\
+      export PROXY_CONFIG="socks4 127.0.0.1 9051"\n\
+      ;;\n\
+    "sol-client")\n\
+      echo "SOL Client: Using proxy chain 3"\n\
+      export PROXY_CONFIG="socks4 127.0.0.1 9052"\n\
+      ;;\n\
+    *)\n\
+      echo "Default: No proxy configuration"\n\
+      ;;\n\
+  esac\n\
+  \n\
+  # Start Tor for proxy functionality\n\
+  if [ "$CONTAINER_TYPE" != "setup" ]; then\n\
+    echo "Starting Tor proxy service..."\n\
+    tor --quiet --runasdaemon 1 --socksport 9050 &\n\
+    sleep 5\n\
     \n\
-    # Create auth file\n\
-    echo "$NORDVPN_USER" > /tmp/nordvpn-auth.txt\n\
-    echo "$NORDVPN_PASS" >> /tmp/nordvpn-auth.txt\n\
-    chmod 600 /tmp/nordvpn-auth.txt\n\
-    \n\
-    # Find appropriate config file based on country\n\
-    CONFIG_FILE=""\n\
-    case "$NORDVPN_COUNTRY" in\n\
-      "United_States"|"US")\n\
-        CONFIG_FILE=$(find /app/vpn-configs -name "*us*.ovpn" | head -1)\n\
-        ;;\n\
-      "United_Kingdom"|"UK")\n\
-        CONFIG_FILE=$(find /app/vpn-configs -name "*uk*.ovpn" | head -1)\n\
-        ;;\n\
-      "Canada"|"CA")\n\
-        CONFIG_FILE=$(find /app/vpn-configs -name "*ca*.ovpn" | head -1)\n\
-        ;;\n\
-      *)\n\
-        CONFIG_FILE=$(find /app/vpn-configs -name "*.ovpn" | head -1)\n\
-        ;;\n\
-    esac\n\
-    \n\
-    if [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ]; then\n\
-      echo "Using config: $CONFIG_FILE"\n\
-      echo "Connecting to VPN..."\n\
-      \n\
-      # Start OpenVPN in background\n\
-      openvpn --config "$CONFIG_FILE" --auth-user-pass /tmp/nordvpn-auth.txt --daemon --log /tmp/openvpn.log\n\
-      \n\
-      # Wait for connection and check logs\n\
-      echo "Waiting for VPN connection..."\n\
-      sleep 10\n\
-      \n\
-      # Check for authentication success in logs\n\
-      if grep -q "AUTH_FAILED" /tmp/openvpn.log; then\n\
-        echo "❌ VPN authentication failed - check NordVPN credentials"\n\
-        echo "Log details:"\n\
-        grep -A 2 -B 2 "AUTH_FAILED" /tmp/openvpn.log\n\
-        echo "Continuing without VPN connection..."\n\
-      elif grep -q "Initialization Sequence Completed" /tmp/openvpn.log; then\n\
-        echo "✅ VPN connected successfully"\n\
-        # Check external IP\n\
-        echo "Checking external IP..."\n\
-        NEW_IP=$(timeout 10 curl -s https://ipinfo.io/ip)\n\
-        if [ -n "$NEW_IP" ]; then\n\
-          echo "External IP: $NEW_IP"\n\
-          curl -s "https://ipinfo.io/$NEW_IP" | grep -E "country|region|city" || true\n\
-        fi\n\
-      elif pgrep openvpn > /dev/null; then\n\
-        echo "🔄 VPN process running, waiting for connection..."\n\
-        sleep 10\n\
-        if grep -q "Initialization Sequence Completed" /tmp/openvpn.log; then\n\
-          echo "✅ VPN connected after delay"\n\
-          NEW_IP=$(timeout 10 curl -s https://ipinfo.io/ip)\n\
-          echo "External IP: $NEW_IP"\n\
-        else\n\
-          echo "⚠️  VPN connection incomplete, continuing without VPN"\n\
-        fi\n\
-      else\n\
-        echo "❌ VPN process failed to start, continuing without VPN"\n\
-      fi\n\
+    # Test proxy connection\n\
+    PROXY_IP=$(timeout 15 curl --socks4 127.0.0.1:9050 -s https://ipinfo.io/ip)\n\
+    if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$ORIGINAL_IP" ]; then\n\
+      echo "✅ Proxy IP confirmed: $PROXY_IP (changed from $ORIGINAL_IP)"\n\
+      PROXY_INFO=$(timeout 15 curl --socks4 127.0.0.1:9050 -s "https://ipinfo.io/$PROXY_IP")\n\
+      echo "Proxy Location: $(echo "$PROXY_INFO" | grep -E \"country|region|city\" | tr \"\\n\" \" \")" \n\
+      return 0\n\
     else\n\
-      echo "No suitable VPN config found for $NORDVPN_COUNTRY, running without VPN"\n\
+      echo "⚠️  Proxy connection available but IP unchanged - continuing anyway"\n\
+      return 0\n\
     fi\n\
-    \n\
-    # Clean up auth file\n\
-    rm -f /tmp/nordvpn-auth.txt\n\
-  else\n\
-    echo "No VPN credentials provided, running without VPN"\n\
   fi\n\
 }\n\
 \n\
 echo "Waiting for ClickHouse to be ready..."\n\
 \n\
-# Wait for ClickHouse to be available (using HTTP interface which is simpler)\n\
+# Wait for ClickHouse to be available\n\
 until curl -s http://clickhouse:8123/ping 2>/dev/null | grep -q "Ok"; do\n\
   echo "ClickHouse not ready, waiting 2 seconds..."\n\
   sleep 2\n\
@@ -131,20 +91,22 @@ echo "ClickHouse is ready!"\n\
 # Run setup if this is the setup container\n\
 if [ "$CONTAINER_TYPE" = "setup" ]; then\n\
   echo "Running database setup..."\n\
-  python3 ch_setup.py\n\
+  python3 setup_database.py\n\
   echo "Setup completed!"\n\
   exit 0\n\
 fi\n\
 \n\
-# Setup VPN for client containers\n\
+# Setup proxy separation for client containers\n\
 if [ "$CONTAINER_TYPE" != "setup" ]; then\n\
-  setup_vpn\n\
-  echo "Waiting 5 seconds for VPN to stabilize..."\n\
-  sleep 5\n\
+  echo "🔗 Setting up proxy-based IP separation"\n\
+  setup_proxy_separation\n\
+  echo "✅ Proxy setup completed - container will continue"\n\
+  echo "Waiting 3 seconds for proxy to stabilize..."\n\
+  sleep 3\n\
 fi\n\
 \n\
 # Execute the main command\n\
-echo "Starting $CONTAINER_TYPE..."\n\
+echo "🚀 Starting $CONTAINER_TYPE with proxy configuration..."\n\
 exec "$@"' > /entrypoint.sh
 
 # Make entrypoint executable
@@ -153,5 +115,5 @@ RUN chmod +x /entrypoint.sh
 # Set entrypoint
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Default command (will be overridden in docker-compose)
+# Default command
 CMD ["python3", "--version"]

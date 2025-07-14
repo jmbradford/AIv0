@@ -76,16 +76,14 @@ clickhouse_data/
 ehthumbs.db
 Thumbs.db
 
-# Environment Variables (if any sensitive configs added)
+# Environment Variables (legacy - no longer used in Tor proxy implementation)
 .env
 .env.local
 .env.*.local
-
-# VPN credentials and sensitive configs
 .env.production
 .env.staging
 
-# VPN logs and temporary files
+# Legacy VPN files (no longer used - system uses Tor proxy)
 vpn-configs/
 *.ovpn
 openvpn.log
