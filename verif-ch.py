@@ -8,29 +8,33 @@ from config import (
 
 def connect_with_retry(max_retries=3):
     """Connect to ClickHouse with retry logic."""
-    for attempt in range(max_retries):
-        try:
-            client = Client(
-                host=CLICKHOUSE_HOST,
-                port=CLICKHOUSE_PORT,
-                user=CLICKHOUSE_USER,
-                password=CLICKHOUSE_PASSWORD,
-                database=CLICKHOUSE_DATABASE
-            )
-            
-            # Test connection by checking if database exists
-            client.execute("SELECT 1")
-            print(f"✅ Connected to ClickHouse successfully (attempt {attempt + 1})")
-            return client
-            
-        except Exception as e:
-            print(f"❌ Connection attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                import time
-                time.sleep(2)
-            else:
-                print(f"❌ Failed to connect after {max_retries} attempts")
-                return None
+    # Try localhost first for external access, then fall back to configured host
+    hosts_to_try = ['localhost', CLICKHOUSE_HOST] if CLICKHOUSE_HOST != 'localhost' else ['localhost']
+    
+    for host in hosts_to_try:
+        for attempt in range(max_retries):
+            try:
+                client = Client(
+                    host=host,
+                    port=CLICKHOUSE_PORT,
+                    user=CLICKHOUSE_USER,
+                    password=CLICKHOUSE_PASSWORD,
+                    database=CLICKHOUSE_DATABASE
+                )
+                
+                # Test connection by checking if database exists
+                client.execute("SELECT 1")
+                print(f"✅ Connected to ClickHouse successfully at {host} (attempt {attempt + 1})")
+                return client
+                
+            except Exception as e:
+                print(f"❌ Connection attempt {attempt + 1} to {host} failed: {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2)
+                    
+    print(f"❌ Failed to connect to any host after {max_retries} attempts each")
+    return None
 
 def verify_tables_exist(client):
     """Verify required symbol-specific tables exist."""
@@ -234,7 +238,7 @@ def verify_data():
         # Check Docker volume size growth
         try:
             import subprocess
-            result = subprocess.run(['docker', 'exec', 'mexc-clickhouse', 'du', '-sh', '/var/lib/clickhouse/'], 
+            result = subprocess.run(['docker', 'exec', 'clickhouse', 'du', '-sh', '/var/lib/clickhouse/'], 
                                   capture_output=True, text=True)
             if result.returncode == 0:
                 volume_size = result.stdout.strip().split('\t')[0]
@@ -245,7 +249,7 @@ def verify_data():
         # Show individual symbol file info
         try:
             for symbol in ['btc_current', 'eth_current', 'sol_current']:
-                file_result = subprocess.run(['docker', 'exec', 'mexc-clickhouse', 'find', 
+                file_result = subprocess.run(['docker', 'exec', 'clickhouse', 'find', 
                                             f'/var/lib/clickhouse/data/{CLICKHOUSE_DATABASE}/{symbol}/', 
                                             '-name', '*.bin', '-exec', 'du', '-h', '{}', ';'], 
                                            capture_output=True, text=True)

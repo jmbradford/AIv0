@@ -51,16 +51,16 @@ setup_proxy_separation() {\n\
   \n\
   # Configure different proxy settings based on container type\n\
   case "$CONTAINER_TYPE" in\n\
-    "btc-client")\n\
-      echo "BTC Client: Using proxy chain 1"\n\
+    "client-btc")\n\
+      echo "BTC Client: Using proxy chain 0"\n\
       export PROXY_CONFIG="socks4 127.0.0.1 9050"\n\
       ;;\n\
-    "eth-client")\n\
-      echo "ETH Client: Using proxy chain 2"\n\
+    "client-eth")\n\
+      echo "ETH Client: Using proxy chain 1"\n\
       export PROXY_CONFIG="socks4 127.0.0.1 9051"\n\
       ;;\n\
-    "sol-client")\n\
-      echo "SOL Client: Using proxy chain 3"\n\
+    "client-sol")\n\
+      echo "SOL Client: Using proxy chain 2"\n\
       export PROXY_CONFIG="socks4 127.0.0.1 9052"\n\
       ;;\n\
     *)\n\
@@ -69,7 +69,7 @@ setup_proxy_separation() {\n\
   esac\n\
   \n\
   # Start Tor for proxy functionality\n\
-  if [ "$CONTAINER_TYPE" != "setup" ]; then\n\
+  if [ "$CONTAINER_TYPE" != "setup-ch" ]; then\n\
     echo "Starting Tor proxy service..."\n\
     tor --quiet --runasdaemon 1 --socksport 9050 &\n\
     sleep 5\n\
@@ -99,15 +99,15 @@ done\n\
 echo "ClickHouse is ready!"\n\
 \n\
 # Run setup if this is the setup container\n\
-if [ "$CONTAINER_TYPE" = "setup" ]; then\n\
+if [ "$CONTAINER_TYPE" = "setup-ch" ]; then\n\
   echo "Running database setup..."\n\
-  python3 setup_database.py\n\
+  python3 setup-ch.py\n\
   echo "Setup completed!"\n\
   exit 0\n\
 fi\n\
 \n\
 # Setup proxy separation for client containers\n\
-if [ "$CONTAINER_TYPE" != "setup" ]; then\n\
+if [ "$CONTAINER_TYPE" != "setup-ch" ]; then\n\
   echo "🔗 Setting up proxy-based IP separation"\n\
   setup_proxy_separation\n\
   echo "✅ Proxy setup completed - container will continue"\n\

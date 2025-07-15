@@ -153,11 +153,10 @@ required_files=(
     "Dockerfile"
     "clickhouse.xml"
     "config.py"
-    "setup_database.py"
-    "client_btc.py"
-    "client_eth.py"
-    "client_sol.py"
-    "verify_data.py"
+    "setup-ch.py"
+    "client-btc.py"
+    "client-eth.py"
+    "client-sol.py"
 )
 
 for file in "${required_files[@]}"; do

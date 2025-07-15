@@ -59,23 +59,8 @@ class HourlyTableRotator:
         """Perform pre-flight checks for export functionality."""
         print("🔍 Performing pre-flight checks...")
         
-        # Check export directory
-        try:
-            os.makedirs(EXPORT_DIR, exist_ok=True)
-            print(f"✅ Export directory accessible: {EXPORT_DIR}")
-            
-            # Test write permissions
-            test_file = os.path.join(EXPORT_DIR, f".preflight_test_{int(time.time())}")
-            try:
-                with open(test_file, 'w') as f:
-                    f.write('preflight_test')
-                os.remove(test_file)
-                print(f"✅ Write permissions verified")
-            except Exception as perm_error:
-                print(f"⚠️  Write permission issue: {perm_error}")
-                
-        except Exception as dir_error:
-            print(f"⚠️  Export directory issue: {dir_error}")
+        # Check and fix export directory permissions
+        self.ensure_export_directory_permissions()
         
         # Check ClickHouse connectivity
         try:
@@ -93,7 +78,95 @@ class HourlyTableRotator:
             except Exception as table_error:
                 print(f"⚠️  Table {current_table} issue: {table_error}")
         
-        print("🔍 Pre-flight checks completed\n")
+        print("🔍 Pre-flight checks completed\\n")
+    
+    def ensure_export_directory_permissions(self):
+        """Ensure export directory exists with proper permissions and is writable."""
+        import stat
+        import pwd
+        import grp
+        
+        print(f"🔧 Ensuring export directory permissions...")
+        
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+            print(f"✅ Export directory accessible: {EXPORT_DIR}")
+            
+            # Get current directory stats
+            dir_stat = os.stat(EXPORT_DIR)
+            current_uid = os.getuid()
+            current_gid = os.getgid()
+            
+            print(f"🔍 Directory owner: {dir_stat.st_uid}:{dir_stat.st_gid}, Process: {current_uid}:{current_gid}")
+            
+            # Check if we can write to the directory
+            can_write = os.access(EXPORT_DIR, os.W_OK)
+            
+            if not can_write:
+                print(f"⚠️  No write access to {EXPORT_DIR}, attempting to fix permissions...")
+                
+                # Try to set permissions to be more permissive
+                try:
+                    os.chmod(EXPORT_DIR, 0o755)
+                    print(f"✅ Set directory permissions to 755")
+                except Exception as chmod_error:
+                    print(f"⚠️  Could not change directory permissions: {chmod_error}")
+                
+                # Check if write access is now available
+                can_write = os.access(EXPORT_DIR, os.W_OK)
+            
+            # Test write permissions with a file
+            test_file = os.path.join(EXPORT_DIR, f".preflight_test_{int(time.time())}")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('preflight_test')
+                
+                # Set file permissions
+                os.chmod(test_file, 0o644)
+                
+                # Clean up test file
+                os.remove(test_file)
+                print(f"✅ Write permissions verified and test file cleaned up")
+                
+            except Exception as write_error:
+                print(f"❌ Write permission test failed: {write_error}")
+                
+                # Try alternative directory if main fails
+                self.setup_fallback_directory()
+                
+        except Exception as dir_error:
+            print(f"❌ Export directory setup failed: {dir_error}")
+            self.setup_fallback_directory()
+    
+    def setup_fallback_directory(self):
+        """Setup fallback export directory when primary fails."""
+        fallback_dirs = ["/tmp/exports", "/app/exports"]
+        
+        for fallback_dir in fallback_dirs:
+            try:
+                print(f"🔄 Trying fallback directory: {fallback_dir}")
+                os.makedirs(fallback_dir, exist_ok=True)
+                os.chmod(fallback_dir, 0o755)
+                
+                # Test write access
+                test_file = os.path.join(fallback_dir, f".fallback_test_{int(time.time())}")
+                with open(test_file, 'w') as f:
+                    f.write('fallback_test')
+                os.remove(test_file)
+                
+                # Update EXPORT_DIR to fallback
+                global EXPORT_DIR
+                EXPORT_DIR = fallback_dir
+                print(f"✅ Using fallback directory: {fallback_dir}")
+                return True
+                
+            except Exception as fallback_error:
+                print(f"⚠️  Fallback {fallback_dir} also failed: {fallback_error}")
+                continue
+        
+        print(f"❌ All export directory options failed - exports may not work")
+        return False
     
     def check_container_status(self, container_name, period_start, period_end):
         """Check if container is likely to have been running during the period."""
@@ -260,19 +333,19 @@ class HourlyTableRotator:
         else:
             print(f"🔍 TRACE: No None values found in mt column")
         
-        # Convert mt enum to string - handle both numeric and string cases
-        # Since ClickHouse Enum8 might return different formats, handle all cases
+        # Convert mt enum to string - ClickHouse Enum8 returns string values directly
+        # Map string values to themselves (no conversion needed since they're already correct)
         mt_map = {
-            1: 't', 2: 'd', 3: 'dp', 4: 'dl',        # Numeric values
-            't': 't', 'd': 'd', 'dp': 'dp', 'dl': 'dl',  # String values
-            'ticker': 't', 'deal': 'd', 'depth': 'dp', 'deadletter': 'dl',  # Full names
-            None: 'dl'  # Handle None values
+            't': 't', 'd': 'd', 'dp': 'dp', 'dl': 'dl',
+            # Also handle numeric values in case they appear
+            1: 't', 2: 'd', 3: 'dp', 4: 'dl'
         }
         
         # STEP 5: Apply mapping with simple map() method (proven to work)
         print(f"🔍 TRACE: Starting mapping process...")
         original_mt_values = df['mt'].tolist()
         print(f"🔍 TRACE: Original mt values before mapping: {set(original_mt_values)}")
+        print(f"🔍 TRACE: Mapping dictionary: {mt_map}")
         
         # Use simple map() method - this approach works in debug_actual_rotation.py
         df['mt'] = df['mt'].map(mt_map)
@@ -310,35 +383,8 @@ class HourlyTableRotator:
         
         filepath = os.path.join(EXPORT_DIR, filename)
         
-        # Ensure export directory exists with robust error handling
-        try:
-            os.makedirs(EXPORT_DIR, exist_ok=True)
-            print(f"✅ Export directory created/verified: {EXPORT_DIR}")
-            
-            # Test write permissions by creating a test file
-            test_file = os.path.join(EXPORT_DIR, f".test_write_{symbol}_{int(time.time())}")
-            try:
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                print(f"✅ Write permissions verified for {EXPORT_DIR}")
-            except Exception as perm_error:
-                print(f"❌ Write permission test failed: {perm_error}")
-                raise Exception(f"No write permission to {EXPORT_DIR}")
-                
-        except Exception as dir_error:
-            print(f"❌ Failed to create/verify export directory: {dir_error}")
-            
-            # Try alternative directory if primary fails
-            fallback_dir = "/tmp/exports"
-            print(f"🔄 Trying fallback directory: {fallback_dir}")
-            try:
-                os.makedirs(fallback_dir, exist_ok=True)
-                filepath = os.path.join(fallback_dir, filename)
-                print(f"✅ Using fallback directory: {fallback_dir}")
-            except Exception as fallback_error:
-                print(f"❌ Fallback directory also failed: {fallback_error}")
-                raise Exception(f"Cannot create any export directory. Primary: {dir_error}, Fallback: {fallback_error}")
+        # Ensure export directory exists with proper permissions
+        self.ensure_export_directory_permissions()
         
         print(f"📄 Final export filepath: {filepath}")
         
@@ -692,19 +738,19 @@ class HourlyTableRotator:
         """Run export for the previous complete period - FORCED mode ignores uptime checks."""
         now = datetime.now()
         
+        print(f"🔧 --ONCE MODE: Force rotation={force_rotation}, Preserve data={preserve_data}")
+        print(f"🔧 --ONCE MODE: Bypassing hourly runtime checks and container status verification")
+        
         # For --once mode, always use a recent time period regardless of debug_mode
         # Use last 5 minutes for immediate data availability
         minutes_past = now.minute % 5
         period_end = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes_past)
         period_start = period_end - timedelta(minutes=5)
         
-        print(f"🔍 DEBUG: Debug mode: {self.debug_mode}")
-        print(f"🔍 DEBUG: Period start: {period_start}")
-        print(f"🔍 DEBUG: Period end: {period_end}")
-        
         print(f"Current time: {now}")
         print(f"Processing data from {period_start} to {period_end}")
         print(f"Data preservation: {'ENABLED' if preserve_data else 'DISABLED'}")
+        print(f"Force rotation: {'ENABLED' if force_rotation else 'DISABLED'}")
         
         return self.run_rotation_cycle(period_start, period_end, force_rotation, preserve_data)
     

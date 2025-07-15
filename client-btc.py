@@ -10,18 +10,19 @@ from config import (
     MEXC_WS_URL, PING_INTERVAL, RECONNECT_DELAY, MAX_RECONNECT_ATTEMPTS,
     CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
     CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE, 
-    MessageType, STATS_INTERVAL, MAX_ERROR_COUNT, SOL_CONFIG
+    MessageType, STATS_INTERVAL, MAX_ERROR_COUNT, BTC_CONFIG
 )
+from ip_verification import verify_ip_uniqueness, wait_for_tor_proxy
 
-class SolDataPipeline:
+class BtcDataPipeline:
     def __init__(self):
         self.ws = None
         self.ch_client = None
         self.running = False
-        self.symbol = SOL_CONFIG["symbol"]
-        self.table_name = SOL_CONFIG["table_name"]
-        self.base_name = SOL_CONFIG["base_name"]
-        self.subscriptions = SOL_CONFIG["subscriptions"]
+        self.symbol = BTC_CONFIG["symbol"]
+        self.table_name = BTC_CONFIG["table_name"]
+        self.base_name = BTC_CONFIG["base_name"]
+        self.subscriptions = BTC_CONFIG["subscriptions"]
         self.stats = {
             'total_records': 0,
             'ticker_count': 0,
@@ -54,7 +55,7 @@ class SolDataPipeline:
                 database=CLICKHOUSE_DATABASE
             )
             
-            # Verify connection and table exists
+            # Verify connection and current table exists
             table_exists = self.ch_client.execute(f"EXISTS TABLE {self.table_name}")[0][0]
             
             if not table_exists:
@@ -121,24 +122,105 @@ class SolDataPipeline:
         return False
     
     def flush_buffer_to_new_table(self):
-        """Flush buffered messages to the new current table."""
+        """Flush buffered messages to the new current table with batch insertion."""
         with self.buffer_lock:
             if self.memory_buffer:
-                print(f"📥 Flushing {len(self.memory_buffer)} buffered messages to new table")
+                buffer_count = len(self.memory_buffer)
+                print(f"📥 Flushing {buffer_count} buffered messages to new table")
+                
                 try:
                     # Reconnect to ensure we're using the new table
                     self.connect_clickhouse()
                     
-                    # Insert buffered messages in chronological order
-                    for ts, mt, message in self.memory_buffer:
-                        self.ch_client.execute(
-                            f"INSERT INTO {self.table_name} (ts, mt, m) VALUES",
-                            [(ts, mt, message)]
-                        )
+                    # Sort buffer by timestamp to ensure chronological order
+                    sorted_buffer = sorted(self.memory_buffer, key=lambda x: x[0])
                     
-                    print(f"✅ Successfully flushed {len(self.memory_buffer)} messages")
+                    # Validate buffer integrity before insertion
+                    self.validate_buffer_integrity(sorted_buffer)
+                    
+                    # Batch insert all buffered messages at once for better performance
+                    print(f"🔄 Performing batch insert of {buffer_count} messages...")
+                    self.ch_client.execute(
+                        f"INSERT INTO {self.table_name} (ts, mt, m) VALUES",
+                        sorted_buffer
+                    )
+                    
+                    print(f"✅ Successfully flushed {buffer_count} messages via batch insert")
+                    
+                    # Verify the insertion was successful
+                    self.verify_buffer_flush(buffer_count)
+                    
                 except Exception as e:
                     print(f"❌ Failed to flush buffer: {e}")
+                    print(f"🔄 Attempting individual message recovery...")
+                    self.fallback_individual_insert()
+    
+    def validate_buffer_integrity(self, buffer_data):
+        """Validate buffer data integrity before insertion."""
+        if not buffer_data:
+            return
+            
+        print(f"🔍 Validating buffer integrity ({len(buffer_data)} messages)...")
+        
+        # Check for duplicate timestamps
+        timestamps = [item[0] for item in buffer_data]
+        unique_timestamps = set(timestamps)
+        if len(timestamps) != len(unique_timestamps):
+            duplicate_count = len(timestamps) - len(unique_timestamps)
+            print(f"⚠️  Found {duplicate_count} duplicate timestamps in buffer")
+        
+        # Check message type distribution
+        message_types = [item[1] for item in buffer_data]
+        type_counts = {}
+        for mt in message_types:
+            type_counts[mt] = type_counts.get(mt, 0) + 1
+        
+        print(f"📊 Buffer message types: {type_counts}")
+        
+        # Check time span
+        if len(buffer_data) > 1:
+            time_span = buffer_data[-1][0] - buffer_data[0][0]
+            print(f"⏰ Buffer time span: {time_span:.3f} seconds")
+            
+        print(f"✅ Buffer validation completed")
+    
+    def verify_buffer_flush(self, expected_count):
+        """Verify that buffer flush was successful."""
+        try:
+            # Get count of recently inserted messages
+            recent_count = self.ch_client.execute(f"""
+                SELECT count(*) FROM {self.table_name} 
+                WHERE ts >= now() - INTERVAL 10 SECOND
+            """)[0][0]
+            
+            if recent_count >= expected_count:
+                print(f"✅ Buffer flush verification passed: {recent_count} recent messages found")
+            else:
+                print(f"⚠️  Buffer flush verification warning: expected {expected_count}, found {recent_count} recent messages")
+                
+        except Exception as e:
+            print(f"⚠️  Buffer flush verification failed: {e}")
+    
+    def fallback_individual_insert(self):
+        """Fallback method for individual message insertion if batch fails."""
+        try:
+            sorted_buffer = sorted(self.memory_buffer, key=lambda x: x[0])
+            success_count = 0
+            
+            for ts, mt, message in sorted_buffer:
+                try:
+                    self.ch_client.execute(
+                        f"INSERT INTO {self.table_name} (ts, mt, m) VALUES",
+                        [(ts, mt, message)]
+                    )
+                    success_count += 1
+                except Exception as e:
+                    print(f"⚠️  Failed to insert individual message: {e}")
+            
+            print(f"📥 Fallback completed: {success_count}/{len(sorted_buffer)} messages inserted")
+            
+        except Exception as e:
+            print(f"❌ Fallback insertion also failed: {e}")
     
     def store_message(self, timestamp, message_type, message_data):
         """Store message either in database or memory buffer during rotation."""
@@ -371,9 +453,19 @@ class SolDataPipeline:
         """Main run loop."""
         print(f"Starting {self.symbol} Data Pipeline...")
         
+        # Wait for Tor proxy to be available
+        if not wait_for_tor_proxy():
+            print("❌ Tor proxy not available. Exiting...")
+            return
+        
+        # Verify IP uniqueness before connecting to MEXC
+        if not verify_ip_uniqueness("client-btc"):
+            print("❌ IP verification failed. Cannot connect to MEXC. Exiting...")
+            return
+        
         # Connect to ClickHouse
         if not self.connect_clickhouse():
-            print("Failed to connect to ClickHouse. Exiting...")
+            print("❌ Failed to connect to ClickHouse. Exiting...")
             return
         
         self.running = True
@@ -406,5 +498,5 @@ class SolDataPipeline:
             print(f"{self.symbol} append-only pipeline stopped.")
 
 if __name__ == "__main__":
-    pipeline = SolDataPipeline()
+    pipeline = BtcDataPipeline()
     pipeline.run()
