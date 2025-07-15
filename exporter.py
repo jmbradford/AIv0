@@ -534,13 +534,19 @@ class HourlyTableRotator:
             return False
     
     def record_export(self, symbol, period_start, filepath, row_count):
-        """Record successful export in tracking table."""
+        """Record successful export in export-log.txt file."""
         try:
-            self.ch_client.execute("""
-            INSERT INTO export_log (symbol, hour_start, export_time, filepath, row_count)
-            VALUES
-            """, [(symbol, period_start, datetime.now(), filepath, row_count)])
-            print(f"✅ Recorded export in tracking table")
+            log_filepath = os.path.join(EXPORT_DIR, "export-log.txt")
+            export_time = datetime.now()
+            file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+            
+            # Format: YYYY-MM-DD HH:MM:SS | SYMBOL | PERIOD_START | FILEPATH | ROWS | SIZE_BYTES
+            log_entry = f"{export_time.strftime('%Y-%m-%d %H:%M:%S')} | {symbol.upper()} | {period_start.strftime('%Y-%m-%d %H:%M:%S')} | {os.path.basename(filepath)} | {row_count} rows | {file_size:,} bytes\n"
+            
+            with open(log_filepath, 'a') as log_file:
+                log_file.write(log_entry)
+            
+            print(f"✅ Recorded export in {log_filepath}")
         except Exception as e:
             print(f"⚠️  Failed to record export: {e}")
     

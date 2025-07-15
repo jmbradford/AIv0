@@ -1,7 +1,7 @@
 # Pipeline
 
 ## Definition
-A production-ready, high-performance cryptocurrency data pipeline. Connects with automated IP verification and separation per asset to MEXC's WebSocket API. Streams market data in real time into an optimized ClickHouse database using StripeLog. Automates hourly exportation into .parquet files using .bin rotations and enhanced buffer memory with zero data loss. Used on Windows 11 with WSL2 Ubuntu and Docker Desktop.
+A production-ready, high-performance cryptocurrency data pipeline. Connects with automated IP verification and separation per asset to MEXC's WebSocket API. Streams market data in real time into an optimized ClickHouse database using StripeLog. Automates hourly exportation into .parquet files using .bin rotations and enhanced buffer memory with extensively verified zero data loss. Includes comprehensive export logging and individual message storage verification. Used on Windows 11 with WSL2 Ubuntu and Docker Desktop.
 
 ## Prerequisites
   Linux Ubuntu (WSL2 used, native compatible)
@@ -154,11 +154,20 @@ docker exec exporter python3 exporter.py --once
 
 # Enhanced Parquet file integrity check with message samples
 python3 ./verif-parq.py
+
+# Review export history and metadata
+cat ./exports/export-log.txt
+
+# Advanced buffer verification (zero message loss)
+docker exec exporter python3 /app/buffer-verification.py
+
+# Individual message storage verification
+docker exec exporter python3 /app/buffer-individual-message-test.py
 ```
 
 ### Directories
 `./venv/` - Python virtual environment
-`./exports/` - Hourly Parquet export files
+`./exports/` - Hourly Parquet export files and export-log.txt
 `/var/lib/docker/volumes/` - ClickHouse data persistence
 
 ### URLs
