@@ -10,12 +10,11 @@ Deploy a complete multi-symbol cryptocurrency data pipeline on any Linux machine
 # 1. Environment setup (creates venv, installs dependencies, validates files)
 ./setup
 
-# Alternative for Ubuntu 24.04+ (bypasses pip3 requirement)
-./setup_ubuntu24
-
 # 2. Deploy complete system (ClickHouse + 3 client containers with IP separation)
 docker-compose up -d
 ```
+
+**Note**: Setup script automatically handles Ubuntu 24.04+ externally managed Python environments.
 
 **Result**: Real-time BTC, ETH, and SOL data collection with each container using different IP addresses via Tor proxy.
 
