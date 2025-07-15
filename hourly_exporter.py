@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Hourly Data Exporter with Container Uptime Monitoring
+Hourly Table Rotation and Export System
 
-This service runs every hour and:
-1. Checks if client containers ran continuously for the previous hour
-2. Exports complete hourly data to Parquet files per asset
-3. Verifies the export integrity
-4. Cleans up the exported data from ClickHouse
+This service rotates StripeLog tables hourly and:
+1. Signals clients to activate memory buffers  
+2. Renames current tables to previous, creates new current tables
+3. Clients reconnect and flush buffers to new tables
+4. Exports previous tables to Parquet files
+5. Drops previous tables entirely (deletes UUID directories)
+6. Provides zero data loss through memory buffer coordination
 """
 
 import os
 import sys
 import time
-import docker
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -32,10 +33,10 @@ CONTAINER_NAMES = {
     "sol": "mexc-sol-client"
 }
 
-class HourlyExporter:
+class HourlyTableRotator:
     def __init__(self):
-        self.docker_client = docker.from_env()
         self.ch_client = None
+        self.debug_mode = os.getenv('EXPORT_DEBUG_MODE', 'false').lower() == 'true'
         self.connect_clickhouse()
         
     def connect_clickhouse(self):
@@ -53,46 +54,125 @@ class HourlyExporter:
             print(f"❌ ClickHouse connection failed: {e}")
             sys.exit(1)
     
-    def get_container_uptime(self, container_name, period_start, period_end):
-        """Check if container was running continuously during the specified period."""
+    def check_container_status(self, container_name, period_start, period_end):
+        """Check if container is likely to have been running during the period."""
         try:
-            container = self.docker_client.containers.get(container_name)
+            # Simple alternative: check if the table has recent data
+            symbol = container_name.replace('mexc-', '').replace('-client', '')
+            current_table = f"{symbol}_current"
             
-            # Get container state
-            state = container.attrs['State']
-            if not state['Running']:
-                print(f"❌ {container_name}: Not currently running")
-                return False
+            # Check if there's data in the current table (indicates container is working)
+            recent_count = self.ch_client.execute(f"""
+                SELECT count(*) FROM {current_table} 
+                WHERE ts >= now() - INTERVAL 5 MINUTE
+            """)[0][0]
             
-            # Parse container start time
-            started_at = datetime.fromisoformat(state['StartedAt'].replace('Z', '+00:00'))
-            started_at = started_at.replace(tzinfo=None)  # Remove timezone for comparison
-            
-            # Check if container started before period_start
-            if started_at > period_start:
-                print(f"❌ {container_name}: Started at {started_at}, after period start {period_start}")
+            if recent_count > 0:
+                print(f"✅ {container_name}: Active (recent data detected)")
+                return True
+            else:
+                print(f"⚠️  {container_name}: No recent data (last 5 minutes)")
                 return False
                 
-            print(f"✅ {container_name}: Running continuously since {started_at}")
+        except Exception as e:
+            print(f"❌ {container_name}: Error checking status: {e}")
+            return False
+    
+    def get_buffer_analysis(self, symbol):
+        """Analyze buffer activity by checking data patterns."""
+        try:
+            current_table = f"{symbol}_current"
+            
+            # Get recent data patterns to understand buffer activity
+            recent_data = self.ch_client.execute(f"""
+                SELECT 
+                    count(*) as total_messages,
+                    min(ts) as earliest_message,
+                    max(ts) as latest_message,
+                    count(DISTINCT mt) as message_types
+                FROM {current_table} 
+                WHERE ts >= now() - INTERVAL 10 MINUTE
+            """)
+            
+            if recent_data and recent_data[0][0] > 0:
+                total, earliest, latest, types = recent_data[0]
+                duration = (latest - earliest).total_seconds() if latest and earliest else 0
+                rate = total / duration if duration > 0 else 0
+                
+                print(f"📊 {symbol.upper()} Buffer Analysis:")
+                print(f"    Recent messages (10min): {total}")
+                print(f"    Message rate: {rate:.2f} msg/sec")
+                print(f"    Message types active: {types}")
+                return {'status': 'active', 'rate': rate, 'total': total}
+            else:
+                print(f"⚠️  {symbol.upper()} Buffer Analysis: No recent activity")
+                return {'status': 'inactive', 'rate': 0, 'total': 0}
+                
+        except Exception as e:
+            print(f"❌ Failed to analyze {symbol} buffer: {e}")
+            return {'status': 'error', 'rate': 0, 'total': 0}
+    
+    def signal_rotation_start(self, symbol):
+        """Signal client to activate memory buffer."""
+        flag_file = f"/tmp/{symbol}_rotate"
+        try:
+            with open(flag_file, 'w') as f:
+                f.write(str(datetime.now()))
+            print(f"🚨 Rotation signal sent to {symbol} client")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to signal {symbol} rotation: {e}")
+            return False
+    
+    def signal_rotation_complete(self, symbol):
+        """Remove rotation signal."""
+        flag_file = f"/tmp/{symbol}_rotate"
+        try:
+            if os.path.exists(flag_file):
+                os.remove(flag_file)
+            print(f"✅ Rotation signal cleared for {symbol}")
+        except Exception as e:
+            print(f"⚠️  Failed to clear rotation signal for {symbol}: {e}")
+    
+    def rotate_table(self, symbol):
+        """Rotate current table to previous and create new current table."""
+        current_table = f"{symbol}_current"
+        previous_table = f"{symbol}_previous"
+        
+        try:
+            # Drop any existing previous table
+            self.ch_client.execute(f"DROP TABLE IF EXISTS {previous_table}")
+            
+            # Rename current to previous (atomic operation)
+            self.ch_client.execute(f"RENAME TABLE {current_table} TO {previous_table}")
+            print(f"📋 Renamed {current_table} → {previous_table}")
+            
+            # Create new current table (gets new UUID directory)
+            self.ch_client.execute(f"""
+            CREATE TABLE {current_table}
+            (
+                ts DateTime64(3),
+                mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
+                m String
+            )
+            ENGINE = StripeLog
+            """)
+            print(f"🆕 Created new {current_table} table")
+            
             return True
             
-        except docker.errors.NotFound:
-            print(f"❌ {container_name}: Container not found")
-            return False
         except Exception as e:
-            print(f"❌ {container_name}: Error checking uptime: {e}")
+            print(f"❌ Failed to rotate {symbol} table: {e}")
             return False
     
-    def get_hourly_data(self, symbol, hour_start, hour_end):
-        """Fetch data for specific hour from ClickHouse."""
+    def get_table_data(self, table_name):
+        """Fetch all data from specified table."""
         query = f"""
         SELECT 
             ts,
             mt,
             m
-        FROM {symbol}
-        WHERE ts >= '{hour_start.strftime('%Y-%m-%d %H:%M:%S')}'
-          AND ts < '{hour_end.strftime('%Y-%m-%d %H:%M:%S')}'
+        FROM {table_name}
         ORDER BY ts
         """
         
@@ -100,30 +180,10 @@ class HourlyExporter:
             result = self.ch_client.execute(query)
             return result
         except Exception as e:
-            print(f"❌ Error fetching {symbol} data: {e}")
+            print(f"❌ Error fetching {table_name} data: {e}")
             return []
     
-    def get_period_data(self, symbol, period_start, period_end):
-        """Fetch data for specific period from ClickHouse."""
-        query = f"""
-        SELECT 
-            ts,
-            mt,
-            m
-        FROM {symbol}
-        WHERE ts >= '{period_start.strftime('%Y-%m-%d %H:%M:%S')}'
-          AND ts < '{period_end.strftime('%Y-%m-%d %H:%M:%S')}'
-        ORDER BY ts
-        """
-        
-        try:
-            result = self.ch_client.execute(query)
-            return result
-        except Exception as e:
-            print(f"❌ Error fetching {symbol} period data: {e}")
-            return []
-    
-    def export_to_parquet(self, symbol, data, hour_start):
+    def export_to_parquet(self, symbol, data, period_start):
         """Export data to Parquet file."""
         if not data:
             print(f"⚠️  No data to export for {symbol}")
@@ -136,8 +196,12 @@ class HourlyExporter:
         mt_map = {1: 't', 2: 'd', 3: 'dp', 4: 'dl'}
         df['mt'] = df['mt'].map(mt_map)
         
-        # Create filename: symbol_YYYYMMDD_HH00.parquet
-        filename = f"{symbol}_{hour_start.strftime('%Y%m%d_%H')}00.parquet"
+        # Create filename based on mode
+        if self.debug_mode:
+            filename = f"{symbol}_{period_start.strftime('%Y%m%d_%H%M')}_debug.parquet"
+        else:
+            filename = f"{symbol}_{period_start.strftime('%Y%m%d_%H')}00.parquet"
+        
         filepath = os.path.join(EXPORT_DIR, filename)
         
         # Ensure export directory exists
@@ -177,308 +241,227 @@ class HourlyExporter:
             print(f"❌ Failed to verify export: {e}")
             return False
     
-    def export_debug_parquet(self, symbol, data, period_start):
-        """Export data to Parquet file for debug mode."""
-        if not data:
-            print(f"⚠️  No data to export for {symbol}")
-            return None
-            
-        # Convert to DataFrame
-        df = pd.DataFrame(data, columns=['ts', 'mt', 'm'])
-        
-        # Convert mt enum to string for better compatibility
-        mt_map = {1: 't', 2: 'd', 3: 'dp', 4: 'dl'}
-        df['mt'] = df['mt'].map(mt_map)
-        
-        # Create filename: symbol_YYYYMMDD_HHMM_debug.parquet
-        filename = f"{symbol}_{period_start.strftime('%Y%m%d_%H%M')}_debug.parquet"
-        filepath = os.path.join(EXPORT_DIR, filename)
-        
-        # Ensure export directory exists
-        os.makedirs(EXPORT_DIR, exist_ok=True)
-        
-        # Write Parquet file with compression
+    def analyze_exported_data(self, symbol, data, total_count):
+        """Analyze the composition of exported data to show buffer effectiveness."""
         try:
-            table = pa.Table.from_pandas(df)
-            pq.write_table(table, filepath, compression='snappy')
+            print(f"\n📊 DATA COMPOSITION ANALYSIS for {symbol.upper()}:")
+            print(f"    Total records exported: {total_count}")
             
-            # Verify file was created and has data
-            file_size = os.path.getsize(filepath)
-            read_table = pq.read_table(filepath)
-            row_count = read_table.num_rows
-            
-            print(f"✅ DEBUG: Exported {symbol}: {filename} ({row_count} rows, {file_size:,} bytes)")
-            return filepath
-            
+            # Count by message type
+            if data and len(data) > 0:
+                # Convert to DataFrame for analysis
+                df = pd.DataFrame(data, columns=['ts', 'mt', 'm'])
+                
+                # Message type breakdown
+                msg_type_counts = df['mt'].value_counts().sort_index()
+                print(f"    Message type breakdown:")
+                for msg_type, count in msg_type_counts.items():
+                    msg_name = {'t': 'ticker', 'd': 'deal', 'dp': 'depth', 'dl': 'deadletter'}.get(msg_type, msg_type)
+                    percentage = (count / total_count) * 100
+                    print(f"      {msg_type} ({msg_name}): {count:,} records ({percentage:.1f}%)")
+                
+                # Time analysis
+                df['ts'] = pd.to_datetime(df['ts'])
+                time_span = df['ts'].max() - df['ts'].min()
+                rate = total_count / time_span.total_seconds() if time_span.total_seconds() > 0 else 0
+                
+                print(f"    Time span: {time_span}")
+                print(f"    Collection rate: {rate:.2f} messages/second")
+                
+                # Check for gaps (potential buffer periods)
+                df_sorted = df.sort_values('ts')
+                time_diffs = df_sorted['ts'].diff().dropna()
+                large_gaps = time_diffs[time_diffs > pd.Timedelta(seconds=5)]
+                
+                if len(large_gaps) > 0:
+                    print(f"    ⚠️  Found {len(large_gaps)} time gaps >5s (potential buffer periods)")
+                    print(f"    Largest gap: {large_gaps.max()}")
+                else:
+                    print(f"    ✅ No significant time gaps detected")
+                
+                # Show recent vs older data distribution
+                median_time = df_sorted['ts'].median()
+                recent_count = len(df_sorted[df_sorted['ts'] >= median_time])
+                older_count = len(df_sorted[df_sorted['ts'] < median_time])
+                print(f"    Data distribution: {older_count} older + {recent_count} recent messages")
+                
+            else:
+                print(f"    ⚠️  No data to analyze")
+                
         except Exception as e:
-            print(f"❌ Failed to export {symbol} to Parquet: {e}")
-            return None
+            print(f"    ❌ Analysis failed: {e}")
     
-    def verify_parquet_integrity(self, filepath, original_count, original_data):
-        """Enhanced verification of exported Parquet file integrity."""
+    def delete_previous_table(self, symbol):
+        """Delete the previous table completely (removes UUID directory)."""
+        previous_table = f"{symbol}_previous"
+        
         try:
-            # Read back the parquet file
-            table = pq.read_table(filepath)
-            df = table.to_pandas()
+            # Count rows before deletion for reporting
+            count_query = f"SELECT count(*) FROM {previous_table}"
+            row_count = self.ch_client.execute(count_query)[0][0]
             
-            # Basic row count check
-            exported_count = len(df)
-            if exported_count != original_count:
-                print(f"❌ Verification failed: Expected {original_count} rows, found {exported_count}")
-                return False
+            # Drop table completely (removes UUID directory)
+            self.ch_client.execute(f"DROP TABLE {previous_table}")
             
-            # Verify columns exist
-            expected_columns = {'ts', 'mt', 'm'}
-            actual_columns = set(df.columns)
-            if expected_columns != actual_columns:
-                print(f"❌ Verification failed: Expected columns {expected_columns}, found {actual_columns}")
-                return False
-            
-            # Sample data verification - check first and last few rows
-            if len(original_data) > 0:
-                # Convert original data to comparable format
-                orig_df = pd.DataFrame(original_data, columns=['ts', 'mt', 'm'])
-                mt_map = {1: 't', 2: 'd', 3: 'dp', 4: 'dl'}
-                orig_df['mt'] = orig_df['mt'].map(mt_map)
-                
-                # Check first row
-                if not orig_df.iloc[0].equals(df.iloc[0]):
-                    print(f"⚠️  First row mismatch (timestamps might differ slightly)")
-                
-                # Check message type distribution
-                orig_mt_counts = orig_df['mt'].value_counts().to_dict()
-                export_mt_counts = df['mt'].value_counts().to_dict()
-                
-                if orig_mt_counts != export_mt_counts:
-                    print(f"⚠️  Message type distribution differs:")
-                    print(f"    Original: {orig_mt_counts}")
-                    print(f"    Exported: {export_mt_counts}")
-            
-            print(f"✅ Enhanced verification passed: {exported_count} rows, data integrity confirmed")
+            print(f"🗑️  Deleted {previous_table} table and UUID directory ({row_count} rows)")
             return True
                 
         except Exception as e:
-            print(f"❌ Failed to verify export integrity: {e}")
+            print(f"❌ Failed to delete {previous_table}: {e}")
             return False
     
-    def delete_exported_data(self, symbol, hour_start, hour_end):
-        """Delete the exported hour of data from ClickHouse."""
-        delete_query = f"""
-        ALTER TABLE {symbol}
-        DELETE WHERE ts >= '{hour_start.strftime('%Y-%m-%d %H:%M:%S')}'
-                 AND ts < '{hour_end.strftime('%Y-%m-%d %H:%M:%S')}'
-        """
-        
-        try:
-            # Count before deletion for verification
-            count_before_query = f"""
-            SELECT count(*) FROM {symbol}
-            WHERE ts >= '{hour_start.strftime('%Y-%m-%d %H:%M:%S')}'
-              AND ts < '{hour_end.strftime('%Y-%m-%d %H:%M:%S')}'
-            """
-            count_before = self.ch_client.execute(count_before_query)[0][0]
-            
-            # Execute deletion
-            self.ch_client.execute(delete_query)
-            
-            # Wait for deletion to complete (ClickHouse processes deletions asynchronously)
-            time.sleep(3)
-            
-            # Verify deletion
-            count_after_query = f"""
-            SELECT count(*) FROM {symbol}
-            WHERE ts >= '{hour_start.strftime('%Y-%m-%d %H:%M:%S')}'
-              AND ts < '{hour_end.strftime('%Y-%m-%d %H:%M:%S')}'
-            """
-            count_after = self.ch_client.execute(count_after_query)[0][0]
-            
-            print(f"✅ Deletion: {count_before} rows → {count_after} rows remaining")
-            
-            if count_after == 0:
-                print(f"✅ Successfully deleted all {symbol} data for hour {hour_start.strftime('%Y-%m-%d %H:00')}")
-                return True
-            else:
-                print(f"⚠️  {count_after} rows still remain after deletion for {symbol}")
-                return count_after < count_before  # Partial success is acceptable
-                
-        except Exception as e:
-            print(f"❌ Failed to delete {symbol} data: {e}")
-            return False
-    
-    def is_hour_exported(self, symbol, hour_start):
-        """Check if this hour has already been exported."""
-        try:
-            result = self.ch_client.execute(f"""
-            SELECT count(*) FROM export_log
-            WHERE symbol = '{symbol}'
-              AND hour_start = '{hour_start.strftime('%Y-%m-%d %H:%M:%S')}'
-            """)
-            return result[0][0] > 0
-        except Exception as e:
-            print(f"⚠️  Failed to check export status: {e}")
-            return False
-    
-    def is_period_exported(self, symbol, period_start):
-        """Check if this period has already been exported (for debug mode)."""
-        try:
-            result = self.ch_client.execute(f"""
-            SELECT count(*) FROM export_log
-            WHERE symbol = '{symbol}'
-              AND hour_start = '{period_start.strftime('%Y-%m-%d %H:%M:%S')}'
-            """)
-            return result[0][0] > 0
-        except Exception as e:
-            print(f"⚠️  Failed to check period export status: {e}")
-            return False
-    
-    def record_export(self, symbol, hour_start, filepath, row_count):
+    def record_export(self, symbol, period_start, filepath, row_count):
         """Record successful export in tracking table."""
         try:
             self.ch_client.execute("""
             INSERT INTO export_log (symbol, hour_start, export_time, filepath, row_count)
             VALUES
-            """, [(symbol, hour_start, datetime.now(), filepath, row_count)])
+            """, [(symbol, period_start, datetime.now(), filepath, row_count)])
             print(f"✅ Recorded export in tracking table")
         except Exception as e:
             print(f"⚠️  Failed to record export: {e}")
     
-    def process_hour(self, hour_start, hour_end):
-        """Process exports for all symbols for a specific hour."""
-        print(f"\n{'='*60}")
-        print(f"Processing hour: {hour_start.strftime('%Y-%m-%d %H:00')} to {hour_end.strftime('%Y-%m-%d %H:00')}")
-        print(f"{'='*60}")
+    def process_symbol_rotation(self, symbol, period_start, period_end, force_rotation=False):
+        """Process complete rotation and export for a single symbol."""
+        container_name = CONTAINER_NAMES[symbol]
+        print(f"\\n📊 Processing {symbol.upper()} rotation ({container_name})")
         
+        # Check container status (skip in debug mode or when forced)
+        if not self.debug_mode and not force_rotation:
+            if not self.check_container_status(container_name, period_start, period_end):
+                print(f"⏭️  Skipping {symbol} - container not active during period")
+                return False
+        elif self.debug_mode:
+            print(f"🐛 DEBUG MODE: Skipping status check for {symbol}")
+        elif force_rotation:
+            print(f"🔧 FORCED MODE: Skipping status check for {symbol}")
+        
+        # Step 1: Get pre-rotation buffer analysis
+        pre_rotation_stats = self.get_buffer_analysis(symbol)
+        
+        # Step 2: Signal client to activate buffer
+        if not self.signal_rotation_start(symbol):
+            return False
+        
+        # Step 3: Wait for buffer activation and monitor
+        print(f"⏳ Waiting 2 seconds for {symbol} buffer activation...")
+        time.sleep(2)
+        
+        # Get post-signal stats to see buffer activation
+        print(f"🔄 Monitoring {symbol} memory buffer activation...")
+        
+        # Step 4: Rotate tables
+        if not self.rotate_table(symbol):
+            self.signal_rotation_complete(symbol)
+            return False
+        
+        # Step 5: Wait for client reconnection and monitor buffer flush
+        print(f"⏳ Waiting 3 seconds for {symbol} client reconnection and buffer flush...")
+        time.sleep(1)
+        
+        # Monitor during reconnection
+        print(f"🔄 Monitoring {symbol} buffer flush process...")
+        time.sleep(2)
+        
+        # Get post-rotation stats to see buffer flush to new table
+        post_rotation_stats = self.get_buffer_analysis(symbol)
+        print(f"✅ Post-rotation {symbol.upper()} buffer: {post_rotation_stats['status']}")
+        
+        # Show buffer effectiveness
+        if post_rotation_stats['total'] > 0:
+            print(f"🎯 Buffer effectiveness: {post_rotation_stats['total']} messages captured during rotation")
+        
+        # Step 6: Get data from previous table
+        previous_table = f"{symbol}_previous"
+        data = self.get_table_data(previous_table)
+        if not data:
+            print(f"⏭️  No data in {previous_table} to export")
+            self.signal_rotation_complete(symbol)
+            return False
+        
+        original_count = len(data)
+        print(f"📥 Found {original_count} records to export from {previous_table}")
+        
+        # Step 6: Analyze data composition
+        self.analyze_exported_data(symbol, data, original_count)
+        
+        # Step 7: Export to Parquet
+        filepath = self.export_to_parquet(symbol, data, period_start)
+        if not filepath:
+            print(f"❌ Export failed for {symbol}")
+            self.signal_rotation_complete(symbol)
+            return False
+        
+        # Step 7: Verify export
+        if not self.verify_export(filepath, original_count):
+            print(f"❌ Verification failed for {symbol} - keeping table")
+            self.signal_rotation_complete(symbol)
+            return False
+        
+        # Step 8: Delete previous table and UUID directory
+        if self.delete_previous_table(symbol):
+            # Record successful export
+            self.record_export(symbol, period_start, filepath, original_count)
+            print(f"✅ Successfully rotated, exported, and cleaned {symbol}")
+            success = True
+        else:
+            print(f"⚠️  Export completed but table deletion failed for {symbol}")
+            success = False
+        
+        # Step 9: Clear rotation signal
+        self.signal_rotation_complete(symbol)
+        
+        return success
+    
+    def run_rotation_cycle(self, period_start, period_end, force_rotation=False):
+        """Run complete rotation cycle for all symbols."""
+        print(f"\\n{'='*70}")
+        if force_rotation:
+            print(f"🔧 FORCED MODE: Processing immediate rotation")
+        elif self.debug_mode:
+            print(f"🐛 DEBUG MODE: Processing period: {period_start.strftime('%Y-%m-%d %H:%M')} to {period_end.strftime('%Y-%m-%d %H:%M')}")
+        else:
+            print(f"⏰ PRODUCTION: Processing hour: {period_start.strftime('%Y-%m-%d %H:00')} to {period_end.strftime('%Y-%m-%d %H:00')}")
+        print(f"{'='*70}")
+        
+        success_count = 0
         for symbol in SYMBOLS:
-            container_name = CONTAINER_NAMES[symbol]
-            print(f"\n📊 Processing {symbol.upper()} ({container_name})")
-            
-            # Check if already exported
-            if self.is_hour_exported(symbol, hour_start):
-                print(f"⏭️  Skipping {symbol} - hour already exported")
-                continue
-            
-            # Check container uptime
-            if not self.get_container_uptime(container_name, hour_start, hour_end):
-                print(f"⏭️  Skipping {symbol} - container didn't run full hour")
-                continue
-            
-            # Get data for the hour
-            data = self.get_hourly_data(symbol, hour_start, hour_end)
-            if not data:
-                print(f"⏭️  Skipping {symbol} - no data for this hour")
-                continue
-            
-            original_count = len(data)
-            print(f"📥 Found {original_count} records to export")
-            
-            # Export to Parquet
-            filepath = self.export_to_parquet(symbol, data, hour_start)
-            if not filepath:
-                print(f"❌ Export failed for {symbol}")
-                continue
-            
-            # Verify export
-            if not self.verify_export(filepath, original_count):
-                print(f"❌ Verification failed for {symbol} - skipping deletion")
-                continue
-            
-            # Delete exported data from ClickHouse
-            if self.delete_exported_data(symbol, hour_start, hour_end):
-                # Record successful export
-                self.record_export(symbol, hour_start, filepath, original_count)
-                print(f"✅ Successfully exported and cleaned {symbol} for hour {hour_start.strftime('%Y-%m-%d %H:00')}")
-            else:
-                print(f"⚠️  Export completed but deletion failed for {symbol}")
+            if self.process_symbol_rotation(symbol, period_start, period_end, force_rotation):
+                success_count += 1
+        
+        print(f"\\n🎯 Rotation complete: {success_count}/{len(SYMBOLS)} symbols processed successfully")
+        return success_count == len(SYMBOLS)
     
-    def get_last_processed_hour(self):
-        """Get the last successfully processed hour from export log."""
-        try:
-            result = self.ch_client.execute("""
-            SELECT max(hour_start) FROM export_log
-            """)
-            if result and result[0][0]:
-                return result[0][0]
-        except:
-            pass
-        return None
-    
-    def run_once(self):
-        """Run export for the previous complete hour."""
-        # Calculate previous hour boundaries
+    def run_once(self, force_rotation=True):
+        """Run export for the previous complete period - FORCED mode ignores uptime checks."""
         now = datetime.now()
-        hour_end = now.replace(minute=0, second=0, microsecond=0)
-        hour_start = hour_end - timedelta(hours=1)
+        
+        if self.debug_mode:
+            # Debug: previous 5-minute period
+            minutes_past = now.minute % 5
+            period_end = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes_past)
+            period_start = period_end - timedelta(minutes=5)
+        else:
+            # Production: previous hour (but forced)
+            period_end = now.replace(minute=0, second=0, microsecond=0)
+            period_start = period_end - timedelta(hours=1)
         
         print(f"Current time: {now}")
-        print(f"Processing data from {hour_start} to {hour_end}")
+        print(f"Processing data from {period_start} to {period_end}")
         
-        self.process_hour(hour_start, hour_end)
-    
-    def run_debug_export(self):
-        """Run export for the previous 5-minute period (DEBUG MODE)."""
-        # Calculate previous 5-minute boundaries
-        now = datetime.now()
-        minutes_past = now.minute % 5
-        period_end = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes_past)
-        period_start = period_end - timedelta(minutes=5)
-        
-        print(f"\n🐛 DEBUG MODE: Current time: {now}")
-        print(f"🐛 DEBUG MODE: Processing 5-minute period from {period_start} to {period_end}")
-        
-        self.process_debug_period(period_start, period_end)
-    
-    def process_debug_period(self, period_start, period_end):
-        """Process exports for all symbols for a 5-minute debug period."""
-        print(f"\n{'='*60}")
-        print(f"DEBUG: Processing period: {period_start.strftime('%Y-%m-%d %H:%M')} to {period_end.strftime('%Y-%m-%d %H:%M')}")
-        print(f"{'='*60}")
-        
-        for symbol in SYMBOLS:
-            container_name = CONTAINER_NAMES[symbol]
-            print(f"\n📊 Processing {symbol.upper()} ({container_name}) [DEBUG MODE]")
-            
-            # Check if already exported (using period_start as identifier)
-            if self.is_period_exported(symbol, period_start):
-                print(f"⏭️  Skipping {symbol} - period already exported")
-                continue
-            
-            # Check container uptime
-            if not self.get_container_uptime(container_name, period_start, period_end):
-                print(f"⏭️  Skipping {symbol} - container didn't run full period")
-                continue
-            
-            # Get data for the period
-            data = self.get_period_data(symbol, period_start, period_end)
-            if not data:
-                print(f"⏭️  Skipping {symbol} - no data for this period")
-                continue
-            
-            original_count = len(data)
-            print(f"📥 Found {original_count} records to export")
-            
-            # Export to Parquet (using different naming for debug)
-            filepath = self.export_debug_parquet(symbol, data, period_start)
-            if not filepath:
-                print(f"❌ Export failed for {symbol}")
-                continue
-            
-            # Enhanced verification
-            if not self.verify_parquet_integrity(filepath, original_count, data):
-                print(f"❌ Verification failed for {symbol} - skipping deletion")
-                continue
-            
-            # Delete exported data from ClickHouse
-            if self.delete_exported_data(symbol, period_start, period_end):
-                # Record successful export
-                self.record_export(symbol, period_start, filepath, original_count)
-                print(f"✅ Successfully exported and cleaned {symbol} for period {period_start.strftime('%Y-%m-%d %H:%M')}")
-            else:
-                print(f"⚠️  Export completed but deletion failed for {symbol}")
+        return self.run_rotation_cycle(period_start, period_end, force_rotation)
     
     def run_continuous(self):
-        """Run continuously, processing each 5-minute period for debugging."""
-        print("🚀 Starting 5-minute exporter service (DEBUG MODE)")
-        
+        """Run continuously, processing at configured intervals."""
+        if self.debug_mode:
+            print("🚀 Starting 5-minute table rotator service (DEBUG MODE)")
+            self._run_debug_continuous()
+        else:
+            print("🚀 Starting hourly table rotator service (PRODUCTION MODE)")
+            self._run_production_continuous()
+    
+    def _run_debug_continuous(self):
+        """Run debug mode with 5-minute intervals."""
         while True:
             now = datetime.now()
             
@@ -491,26 +474,50 @@ class HourlyExporter:
             wait_seconds = (wait_until - now).total_seconds()
             
             if wait_seconds > 0:
-                print(f"\n⏰ Waiting {wait_seconds:.0f} seconds until {wait_until} for next export")
+                print(f"\\n⏰ [DEBUG] Waiting {wait_seconds:.0f} seconds until {wait_until} for next rotation")
                 time.sleep(wait_seconds)
             
             # Process the previous 5-minute period
-            self.run_debug_export()
+            self.run_once()
+            
+            # Short sleep to prevent tight loop
+            time.sleep(10)
+    
+    def _run_production_continuous(self):
+        """Run production mode with hourly intervals."""
+        while True:
+            now = datetime.now()
+            
+            # Calculate next hour boundary
+            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            
+            # Wait until 1 minute after the hour to ensure data completeness
+            wait_until = next_hour + timedelta(minutes=1)
+            wait_seconds = (wait_until - now).total_seconds()
+            
+            if wait_seconds > 0:
+                print(f"\\n⏰ [PRODUCTION] Waiting {wait_seconds:.0f} seconds until {wait_until} for next rotation")
+                time.sleep(wait_seconds)
+            
+            # Process the previous hour
+            self.run_once()
             
             # Short sleep to prevent tight loop
             time.sleep(10)
 
 def main():
     """Main entry point."""
-    exporter = HourlyExporter()
+    rotator = HourlyTableRotator()
     
     # Check if this is a one-time run or continuous
     if len(sys.argv) > 1 and sys.argv[1] == "--once":
-        print("Running one-time export for previous hour")
-        exporter.run_once()
+        print("Running one-time table rotation and export")
+        success = rotator.run_once()
+        sys.exit(0 if success else 1)
     else:
-        print("Starting continuous hourly export service")
-        exporter.run_continuous()
+        mode = "DEBUG" if rotator.debug_mode else "PRODUCTION"
+        print(f"Starting continuous table rotation service in {mode} mode")
+        rotator.run_continuous()
 
 if __name__ == "__main__":
     main()

@@ -27,6 +27,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Create user and group for proper permissions (will be overridden by docker-compose user setting)
+RUN groupadd -g 1000 mexc && useradd -u 1000 -g mexc -s /bin/bash -m mexc
+
+# Ensure /tmp and /exports directories have proper permissions
+RUN mkdir -p /tmp /exports && chmod 777 /tmp /exports
+
+# Add mexc user to docker group for socket access (use host GID)
+RUN groupadd -g 989 docker 2>/dev/null || true
+RUN usermod -aG docker mexc 2>/dev/null || true
+
 # Create entrypoint script using proxy chains for IP separation
 RUN echo '#!/bin/bash\n\
 echo "Container startup: $CONTAINER_TYPE"\n\

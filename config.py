@@ -41,10 +41,11 @@ TICKER_FIELDS = ['lastPrice', 'fairPrice', 'indexPrice', 'holdVol', 'fundingRate
 DEAL_FIELDS = ['p', 'v', 'T']  # price, volume, trade direction (T: 1=buy, 2=sell)
 DEPTH_FIELDS = ['bids', 'asks']  # Each contains [price, amount, count] arrays
 
-# Symbol-specific configurations
+# Symbol-specific configurations with rotating tables
 BTC_CONFIG = {
     "symbol": "BTC_USDT",
-    "table_name": "btc",
+    "table_name": "btc_current",
+    "base_name": "btc",
     "subscriptions": [
         {"method": "sub.ticker", "param": {"symbol": "BTC_USDT"}},
         {"method": "sub.deal", "param": {"symbol": "BTC_USDT"}},
@@ -54,7 +55,8 @@ BTC_CONFIG = {
 
 ETH_CONFIG = {
     "symbol": "ETH_USDT",
-    "table_name": "eth", 
+    "table_name": "eth_current",
+    "base_name": "eth",
     "subscriptions": [
         {"method": "sub.ticker", "param": {"symbol": "ETH_USDT"}},
         {"method": "sub.deal", "param": {"symbol": "ETH_USDT"}},
@@ -64,7 +66,8 @@ ETH_CONFIG = {
 
 SOL_CONFIG = {
     "symbol": "SOL_USDT",
-    "table_name": "sol",
+    "table_name": "sol_current",
+    "base_name": "sol",
     "subscriptions": [
         {"method": "sub.ticker", "param": {"symbol": "SOL_USDT"}},
         {"method": "sub.deal", "param": {"symbol": "SOL_USDT"}},

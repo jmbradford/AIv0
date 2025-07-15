@@ -28,6 +28,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mexc-setup
+    user: "1000:1000"
     environment:
       - CONTAINER_TYPE=setup
       - CLICKHOUSE_HOST=clickhouse
@@ -45,6 +46,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mexc-btc-client
+    user: "1000:1000"
     environment:
       - CONTAINER_TYPE=btc-client
       - CLICKHOUSE_HOST=clickhouse
@@ -79,6 +81,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mexc-eth-client
+    user: "1000:1000"
     environment:
       - CONTAINER_TYPE=eth-client
       - CLICKHOUSE_HOST=clickhouse
@@ -112,6 +115,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mexc-sol-client
+    user: "1000:1000"
     environment:
       - CONTAINER_TYPE=sol-client
       - CLICKHOUSE_HOST=clickhouse
@@ -145,12 +149,13 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mexc-exporter
+    user: "1000:1000"
     environment:
       - CONTAINER_TYPE=exporter
       - CLICKHOUSE_HOST=clickhouse
+      - EXPORT_DEBUG_MODE=true  # Set to 'false' for production hourly mode
     volumes:
       - ./exports:/exports  # Mount local exports directory
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # For container monitoring
     depends_on:
       clickhouse:
         condition: service_healthy

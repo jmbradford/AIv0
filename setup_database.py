@@ -71,45 +71,45 @@ def create_database_and_table():
         client.execute("DROP TABLE IF EXISTS btc")
         client.execute("DROP TABLE IF EXISTS eth")
         client.execute("DROP TABLE IF EXISTS sol")
+        client.execute("DROP TABLE IF EXISTS btc_current")
+        client.execute("DROP TABLE IF EXISTS eth_current")
+        client.execute("DROP TABLE IF EXISTS sol_current")
+        client.execute("DROP TABLE IF EXISTS btc_previous")
+        client.execute("DROP TABLE IF EXISTS eth_previous")
+        client.execute("DROP TABLE IF EXISTS sol_previous")
         
-        # Create unified 3-column MergeTree tables for each symbol (supports DELETE)
-        print("Creating btc table with DELETE support...")
+        # Create rotating StripeLog tables for hourly directory rotation
+        print("Creating btc_current table (StripeLog - rotating)...")
         client.execute("""
-        CREATE TABLE btc
+        CREATE TABLE btc_current
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
             m String
         )
-        ENGINE = MergeTree()
-        ORDER BY ts
-        PARTITION BY toYYYYMMDD(ts)
+        ENGINE = StripeLog
         """)
         
-        print("Creating eth table with DELETE support...")
+        print("Creating eth_current table (StripeLog - rotating)...")
         client.execute("""
-        CREATE TABLE eth
+        CREATE TABLE eth_current
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
             m String
         )
-        ENGINE = MergeTree()
-        ORDER BY ts
-        PARTITION BY toYYYYMMDD(ts)
+        ENGINE = StripeLog
         """)
         
-        print("Creating sol table with DELETE support...")
+        print("Creating sol_current table (StripeLog - rotating)...")
         client.execute("""
-        CREATE TABLE sol
+        CREATE TABLE sol_current
         (
             ts DateTime64(3),
             mt Enum8('t' = 1, 'd' = 2, 'dp' = 3, 'dl' = 4),
             m String
         )
-        ENGINE = MergeTree()
-        ORDER BY ts
-        PARTITION BY toYYYYMMDD(ts)
+        ENGINE = StripeLog
         """)
         
         # Create export tracking table for hourly exports
@@ -128,22 +128,25 @@ def create_database_and_table():
         PARTITION BY toYYYYMM(hour_start)
         """)
         
-        print("MergeTree symbol tables and export tracking created successfully!")
+        print("StripeLog symbol tables and export tracking created successfully!")
         
         # Verify setup
         tables = client.execute("SHOW TABLES")
         print(f"\nTables in database '{CLICKHOUSE_DATABASE}':")
         for table in tables:
-            print(f"  - {table[0]} (MergeTree - supports DELETE)")
+            if table[0].endswith('_current'):
+                print(f"  - {table[0]} (StripeLog - rotating)")
+            else:
+                print(f"  - {table[0]} (MergeTree)")
         
         print(f"\nSetup Summary:")
-        print(f"  BTC data: btc table (MergeTree with hourly partitions)")
-        print(f"  ETH data: eth table (MergeTree with hourly partitions)")
-        print(f"  SOL data: sol table (MergeTree with hourly partitions)")
+        print(f"  BTC data: btc_current table (StripeLog → rotating UUID directories)")
+        print(f"  ETH data: eth_current table (StripeLog → rotating UUID directories)")
+        print(f"  SOL data: sol_current table (StripeLog → rotating UUID directories)")
         print(f"  Schema: ts (timestamp), mt (message type), m (message data)")
-        print(f"  Storage: MergeTree engine supports DELETE operations")
-        print(f"  Architecture: Partitioned by date for efficient deletion")
-        print("\nUnified symbol-specific database with DELETE support completed successfully!")
+        print(f"  Storage: StripeLog engine with hourly table rotation")
+        print(f"  Architecture: 3 current tables, hourly rotation with complete directory cleanup")
+        print("\nRotating StripeLog database with hourly directory cleanup completed successfully!")
         
     except Exception as e:
         print(f"Error during setup: {e}")

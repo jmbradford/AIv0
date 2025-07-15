@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import websocket
+import os
 from datetime import datetime
 from clickhouse_driver import Client
 from config import (
@@ -19,6 +20,7 @@ class SolDataPipeline:
         self.running = False
         self.symbol = SOL_CONFIG["symbol"]
         self.table_name = SOL_CONFIG["table_name"]
+        self.base_name = SOL_CONFIG["base_name"]
         self.subscriptions = SOL_CONFIG["subscriptions"]
         self.stats = {
             'total_records': 0,
@@ -30,6 +32,16 @@ class SolDataPipeline:
             'last_reset': time.time()
         }
         self.reconnect_count = 0
+        
+        # Memory buffer for zero data loss during rotation
+        self.memory_buffer = []
+        self.buffer_active = False
+        self.rotation_flag_file = f"/tmp/{self.base_name}_rotate"
+        self.buffer_lock = threading.Lock()
+        
+        # Start rotation monitoring thread
+        self.rotation_monitor_thread = threading.Thread(target=self.monitor_rotation_signal, daemon=True)
+        self.rotation_monitor_thread.start()
         
     def connect_clickhouse(self):
         """Establish ClickHouse connection."""
@@ -49,12 +61,103 @@ class SolDataPipeline:
                 print(f"❌ Table {self.table_name} missing - run setup_database.py first")
                 return False
                 
-            print(f"✅ Connected to ClickHouse - {self.symbol} append-only mode ready")
-            print(f"  Table: {self.table_name}.bin")
+            print(f"✅ Connected to ClickHouse - {self.symbol} rotating mode ready")
+            print(f"  Current table: {self.table_name}")
             return True
         except Exception as e:
             print(f"❌ Failed to connect to ClickHouse: {e}")
             return False
+    
+    def monitor_rotation_signal(self):
+        """Monitor for table rotation signal and manage memory buffer."""
+        while True:
+            try:
+                if os.path.exists(self.rotation_flag_file):
+                    if not self.buffer_active:
+                        print(f"🔄 Table rotation detected - activating memory buffer for {self.base_name}")
+                        with self.buffer_lock:
+                            self.buffer_active = True
+                            self.memory_buffer = []
+                        
+                        # Wait for table rotation to complete
+                        self.wait_for_table_rotation()
+                        
+                        # Flush buffer to new table
+                        self.flush_buffer_to_new_table()
+                        
+                        # Deactivate buffer
+                        with self.buffer_lock:
+                            self.buffer_active = False
+                            self.memory_buffer = []
+                        
+                        print(f"✅ Table rotation complete - buffer deactivated for {self.base_name}")
+                
+                time.sleep(0.5)  # Check every 500ms
+            except Exception as e:
+                print(f"⚠️  Rotation monitor error: {e}")
+                time.sleep(1)
+    
+    def wait_for_table_rotation(self):
+        """Wait for new current table to be created."""
+        print(f"⏳ Waiting for new {self.table_name} table...")
+        max_wait = 10  # Maximum 10 seconds
+        wait_count = 0
+        
+        while wait_count < max_wait:
+            try:
+                # Check if current table still exists (should be renamed to previous)
+                current_exists = self.ch_client.execute(f"EXISTS TABLE {self.table_name}")[0][0]
+                if current_exists:
+                    # Table was recreated - rotation complete
+                    print(f"✅ New {self.table_name} table detected")
+                    return True
+            except:
+                pass
+            
+            time.sleep(1)
+            wait_count += 1
+        
+        print(f"⚠️  Table rotation timeout - proceeding anyway")
+        return False
+    
+    def flush_buffer_to_new_table(self):
+        """Flush buffered messages to the new current table."""
+        with self.buffer_lock:
+            if self.memory_buffer:
+                print(f"📥 Flushing {len(self.memory_buffer)} buffered messages to new table")
+                try:
+                    # Reconnect to ensure we're using the new table
+                    self.connect_clickhouse()
+                    
+                    # Insert buffered messages in chronological order
+                    for ts, mt, message in self.memory_buffer:
+                        self.ch_client.execute(
+                            f"INSERT INTO {self.table_name} (ts, mt, m) VALUES",
+                            [(ts, mt, message)]
+                        )
+                    
+                    print(f"✅ Successfully flushed {len(self.memory_buffer)} messages")
+                except Exception as e:
+                    print(f"❌ Failed to flush buffer: {e}")
+    
+    def store_message(self, timestamp, message_type, message_data):
+        """Store message either in database or memory buffer during rotation."""
+        with self.buffer_lock:
+            if self.buffer_active:
+                # Store in memory buffer during rotation
+                self.memory_buffer.append((timestamp, message_type, message_data))
+                return True
+            else:
+                # Normal database storage
+                try:
+                    self.ch_client.execute(
+                        f"INSERT INTO {self.table_name} (ts, mt, m) VALUES",
+                        [(timestamp, message_type, message_data)]
+                    )
+                    return True
+                except Exception as e:
+                    print(f"❌ Database insert failed: {e}")
+                    return False
     
     def extract_timestamp(self, data):
         """Extract timestamp from MEXC message data."""
@@ -176,16 +279,13 @@ class SolDataPipeline:
                 self.running = False
     
     def insert_data(self, timestamp, msg_type, message_data):
-        """Insert data into unified table."""
-        try:
-            self.ch_client.execute(
-                f"INSERT INTO {self.table_name} (ts, mt, m) VALUES",
-                [(timestamp, msg_type, message_data)]
-            )
-            print(f"✓ {msg_type} data appended to {self.table_name}.bin")
+        """Insert data into current table or memory buffer during rotation."""
+        if self.store_message(timestamp, msg_type, message_data):
+            if not self.buffer_active:
+                print(f"✓ {msg_type} data appended to {self.table_name}")
             self.stats['total_records'] += 1
-        except Exception as e:
-            print(f"❌ {self.symbol} insert failed: {e}")
+        else:
+            print(f"❌ {self.symbol} insert failed")
             self.stats['errors'] += 1
     
     def on_message(self, ws, message):
