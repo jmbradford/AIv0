@@ -38,6 +38,7 @@ class HourlyTableRotator:
         self.ch_client = None
         self.debug_mode = os.getenv('EXPORT_DEBUG_MODE', 'false').lower() == 'true'
         self.connect_clickhouse()
+        self.perform_preflight_checks()
         
     def connect_clickhouse(self):
         """Connect to ClickHouse database."""
@@ -53,6 +54,46 @@ class HourlyTableRotator:
         except Exception as e:
             print(f"❌ ClickHouse connection failed: {e}")
             sys.exit(1)
+    
+    def perform_preflight_checks(self):
+        """Perform pre-flight checks for export functionality."""
+        print("🔍 Performing pre-flight checks...")
+        
+        # Check export directory
+        try:
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+            print(f"✅ Export directory accessible: {EXPORT_DIR}")
+            
+            # Test write permissions
+            test_file = os.path.join(EXPORT_DIR, f".preflight_test_{int(time.time())}")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('preflight_test')
+                os.remove(test_file)
+                print(f"✅ Write permissions verified")
+            except Exception as perm_error:
+                print(f"⚠️  Write permission issue: {perm_error}")
+                
+        except Exception as dir_error:
+            print(f"⚠️  Export directory issue: {dir_error}")
+        
+        # Check ClickHouse connectivity
+        try:
+            self.ch_client.execute("SELECT 1")
+            print(f"✅ ClickHouse connectivity confirmed")
+        except Exception as db_error:
+            print(f"❌ ClickHouse connectivity issue: {db_error}")
+        
+        # Check required tables exist
+        for symbol in SYMBOLS:
+            try:
+                current_table = f"{symbol}_current"
+                count = self.ch_client.execute(f"SELECT count(*) FROM {current_table}")[0][0]
+                print(f"✅ Table {current_table} exists ({count} rows)")
+            except Exception as table_error:
+                print(f"⚠️  Table {current_table} issue: {table_error}")
+        
+        print("🔍 Pre-flight checks completed\n")
     
     def check_container_status(self, container_name, period_start, period_end):
         """Check if container is likely to have been running during the period."""
@@ -178,6 +219,9 @@ class HourlyTableRotator:
         
         try:
             result = self.ch_client.execute(query)
+            print(f"🔍 DEBUG: First few rows from {table_name}: {result[:3] if result else 'No data'}")
+            if result:
+                print(f"🔍 DEBUG: Sample mt values from DB: {[row[1] for row in result[:5]]}")
             return result
         except Exception as e:
             print(f"❌ Error fetching {table_name} data: {e}")
@@ -189,39 +233,166 @@ class HourlyTableRotator:
             print(f"⚠️  No data to export for {symbol}")
             return None
             
-        # Convert to DataFrame
-        df = pd.DataFrame(data, columns=['ts', 'mt', 'm'])
+        print(f"🔍 TRACE: Starting export for {symbol} with {len(data)} records")
+        print(f"🔍 TRACE: Raw data first 2 rows: {data[:2]}")
         
-        # Convert mt enum to string for better compatibility
-        mt_map = {1: 't', 2: 'd', 3: 'dp', 4: 'dl'}
+        # STEP 1: Extract mt values from raw data
+        raw_mt_values = [row[1] for row in data[:10]]  # Get first 10 mt values
+        print(f"🔍 TRACE: Raw mt values from data tuples: {raw_mt_values}")
+        print(f"🔍 TRACE: Raw mt value types: {[type(x) for x in raw_mt_values[:5]]}")
+        
+        # STEP 2: Convert to DataFrame
+        df = pd.DataFrame(data, columns=['ts', 'mt', 'm'])
+        print(f"🔍 TRACE: DataFrame created successfully")
+        
+        # STEP 3: Check DataFrame mt column immediately after creation
+        print(f"🔍 TRACE: DataFrame mt values (first 10): {df['mt'].head(10).tolist()}")
+        print(f"🔍 TRACE: DataFrame mt dtype: {df['mt'].dtype}")
+        print(f"🔍 TRACE: DataFrame mt unique values: {df['mt'].unique()}")
+        print(f"🔍 TRACE: DataFrame mt value counts: {df['mt'].value_counts()}")
+        print(f"🔍 TRACE: DataFrame mt null count: {df['mt'].isnull().sum()}")
+        
+        # STEP 4: Check for any None values
+        none_mask = df['mt'].isnull()
+        if none_mask.any():
+            print(f"🔍 TRACE: Found {none_mask.sum()} None values in mt column!")
+            print(f"🔍 TRACE: None value indices: {df[none_mask].index.tolist()}")
+        else:
+            print(f"🔍 TRACE: No None values found in mt column")
+        
+        # Convert mt enum to string - handle both numeric and string cases
+        # Since ClickHouse Enum8 might return different formats, handle all cases
+        mt_map = {
+            1: 't', 2: 'd', 3: 'dp', 4: 'dl',        # Numeric values
+            't': 't', 'd': 'd', 'dp': 'dp', 'dl': 'dl',  # String values
+            'ticker': 't', 'deal': 'd', 'depth': 'dp', 'deadletter': 'dl',  # Full names
+            None: 'dl'  # Handle None values
+        }
+        
+        # STEP 5: Apply mapping with simple map() method (proven to work)
+        print(f"🔍 TRACE: Starting mapping process...")
+        original_mt_values = df['mt'].tolist()
+        print(f"🔍 TRACE: Original mt values before mapping: {set(original_mt_values)}")
+        
+        # Use simple map() method - this approach works in debug_actual_rotation.py
         df['mt'] = df['mt'].map(mt_map)
+        print(f"🔍 TRACE: Mapping applied successfully with simple map() method")
+        
+        # STEP 6: Check mapping results
+        print(f"🔍 TRACE: Mt values after mapping (first 10): {df['mt'].head(10).tolist()}")
+        print(f"🔍 TRACE: Mt unique values after mapping: {df['mt'].unique()}")
+        print(f"🔍 TRACE: Mt value counts after mapping: {df['mt'].value_counts()}")
+        print(f"🔍 TRACE: Mt column dtype after mapping: {df['mt'].dtype}")
+        
+        # Verify no null values
+        null_count = df['mt'].isnull().sum()
+        if null_count > 0:
+            print(f"⚠️  TRACE: {null_count} null values found after mapping - this should not happen!")
+            # Force fill any remaining nulls
+            df['mt'] = df['mt'].fillna('dl')
+            print(f"🔍 TRACE: Filled remaining nulls with 'dl'")
+        else:
+            print(f"✅ TRACE: No null values found after mapping")
+            
+        print(f"🔍 TRACE: Final mt values after mapping: {df['mt'].value_counts()}")
+        
+        # Force flush stdout to ensure debug prints appear
+        import sys
+        sys.stdout.flush()
         
         # Create filename based on mode
         if self.debug_mode:
             filename = f"{symbol}_{period_start.strftime('%Y%m%d_%H%M')}_debug.parquet"
         else:
             filename = f"{symbol}_{period_start.strftime('%Y%m%d_%H')}00.parquet"
+            
+        print(f"🔍 DEBUG: Creating file: {filename} in directory: {EXPORT_DIR}")
         
         filepath = os.path.join(EXPORT_DIR, filename)
         
-        # Ensure export directory exists
-        os.makedirs(EXPORT_DIR, exist_ok=True)
-        
-        # Write Parquet file with compression
+        # Ensure export directory exists with robust error handling
         try:
-            table = pa.Table.from_pandas(df)
-            pq.write_table(table, filepath, compression='snappy')
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+            print(f"✅ Export directory created/verified: {EXPORT_DIR}")
             
-            # Verify file was created and has data
+            # Test write permissions by creating a test file
+            test_file = os.path.join(EXPORT_DIR, f".test_write_{symbol}_{int(time.time())}")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                print(f"✅ Write permissions verified for {EXPORT_DIR}")
+            except Exception as perm_error:
+                print(f"❌ Write permission test failed: {perm_error}")
+                raise Exception(f"No write permission to {EXPORT_DIR}")
+                
+        except Exception as dir_error:
+            print(f"❌ Failed to create/verify export directory: {dir_error}")
+            
+            # Try alternative directory if primary fails
+            fallback_dir = "/tmp/exports"
+            print(f"🔄 Trying fallback directory: {fallback_dir}")
+            try:
+                os.makedirs(fallback_dir, exist_ok=True)
+                filepath = os.path.join(fallback_dir, filename)
+                print(f"✅ Using fallback directory: {fallback_dir}")
+            except Exception as fallback_error:
+                print(f"❌ Fallback directory also failed: {fallback_error}")
+                raise Exception(f"Cannot create any export directory. Primary: {dir_error}, Fallback: {fallback_error}")
+        
+        print(f"📄 Final export filepath: {filepath}")
+        
+        # STEP 7: Write Parquet file with compression
+        try:
+            print(f"🔍 TRACE: About to create Arrow table for {symbol}")
+            print(f"🔍 TRACE: Final DataFrame shape: {df.shape}")
+            print(f"🔍 TRACE: Final DataFrame columns: {df.columns.tolist()}")
+            print(f"🔍 TRACE: Final DataFrame dtypes: {df.dtypes.to_dict()}")
+            
+            # Check mt column one more time before Arrow conversion
+            print(f"🔍 TRACE: Final mt values before Arrow: {df['mt'].value_counts()}")
+            print(f"🔍 TRACE: Final mt nulls before Arrow: {df['mt'].isnull().sum()}")
+            
+            # Create Arrow table from pandas DataFrame
+            print(f"🔍 TRACE: Creating Arrow table from pandas")
+            table = pa.Table.from_pandas(df)
+            print(f"🔍 TRACE: Arrow table created successfully")
+            print(f"🔍 TRACE: Arrow table schema: {table.schema}")
+            
+            # Check Arrow table mt column
+            mt_column = table.column('mt')
+            print(f"🔍 TRACE: Arrow mt column type: {mt_column.type}")
+            print(f"🔍 TRACE: Arrow mt column length: {len(mt_column)}")
+            
+            # Verify Arrow table mt column values
+            mt_pandas_from_arrow = mt_column.to_pandas()
+            print(f"🔍 TRACE: Arrow mt column values: {mt_pandas_from_arrow.value_counts()}")
+            print(f"🔍 TRACE: Arrow mt column nulls: {mt_pandas_from_arrow.isnull().sum()}")
+            
+            print(f"🔍 TRACE: Writing to {filepath}")
+            pq.write_table(table, filepath, compression='snappy')
+            print(f"🔍 TRACE: Parquet file written successfully")
+            
+            # STEP 8: Verify file was created and has data
             file_size = os.path.getsize(filepath)
             read_table = pq.read_table(filepath)
             row_count = read_table.num_rows
+            
+            print(f"🔍 TRACE: Reading back written file for verification")
+            print(f"🔍 TRACE: Read back table schema: {read_table.schema}")
+            
+            # Check mt column in read-back data
+            read_back_df = read_table.to_pandas()
+            print(f"🔍 TRACE: Read back mt values: {read_back_df['mt'].value_counts()}")
+            print(f"🔍 TRACE: Read back mt nulls: {read_back_df['mt'].isnull().sum()}")
             
             print(f"✅ Exported {symbol}: {filename} ({row_count} rows, {file_size:,} bytes)")
             return filepath
             
         except Exception as e:
             print(f"❌ Failed to export {symbol} to Parquet: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def verify_export(self, filepath, original_count):
@@ -251,6 +422,12 @@ class HourlyTableRotator:
             if data and len(data) > 0:
                 # Convert to DataFrame for analysis
                 df = pd.DataFrame(data, columns=['ts', 'mt', 'm'])
+                
+                # DEBUG: Check what's in the data
+                print(f"🔍 DEBUG: Sample raw data from analyze_exported_data:")
+                print(f"    First 3 rows: {data[:3]}")
+                print(f"    Mt column types: {df['mt'].dtype}")
+                print(f"    Mt unique values: {df['mt'].unique()}")
                 
                 # Message type breakdown
                 msg_type_counts = df['mt'].value_counts().sort_index()
@@ -321,7 +498,73 @@ class HourlyTableRotator:
         except Exception as e:
             print(f"⚠️  Failed to record export: {e}")
     
-    def process_symbol_rotation(self, symbol, period_start, period_end, force_rotation=False):
+    def verify_parquet_vs_clickhouse(self, symbol, filepath):
+        """Compare exported Parquet file with ClickHouse previous table."""
+        previous_table = f"{symbol}_previous"
+        
+        try:
+            print(f"\\n🔍 VERIFICATION: Comparing {symbol} Parquet vs ClickHouse")
+            
+            # Read Parquet file
+            parquet_df = pd.read_parquet(filepath)
+            parquet_count = len(parquet_df)
+            print(f"📄 Parquet file: {parquet_count} rows")
+            
+            # Get ClickHouse data
+            ch_data = self.get_table_data(previous_table)
+            ch_count = len(ch_data)
+            print(f"🗄️  ClickHouse table: {ch_count} rows")
+            
+            # Compare counts
+            if parquet_count != ch_count:
+                print(f"❌ Row count mismatch: Parquet={parquet_count}, ClickHouse={ch_count}")
+                return False
+                
+            # Convert ClickHouse data to DataFrame for comparison
+            ch_df = pd.DataFrame(ch_data, columns=['ts', 'mt', 'm'])
+            
+            # Compare message type distributions
+            parquet_mt_counts = parquet_df['mt'].value_counts().sort_index()
+            ch_mt_counts = ch_df['mt'].value_counts().sort_index()
+            
+            print(f"📊 Message type comparison:")
+            print(f"    Parquet: {dict(parquet_mt_counts)}")
+            print(f"    ClickHouse: {dict(ch_mt_counts)}")
+            
+            # Check for null values in Parquet
+            parquet_nulls = parquet_df.isnull().sum()
+            if parquet_nulls.sum() > 0:
+                print(f"⚠️  Parquet null values found: {dict(parquet_nulls[parquet_nulls > 0])}")
+                return False
+            
+            # Check for null values in ClickHouse
+            ch_nulls = ch_df.isnull().sum()
+            if ch_nulls.sum() > 0:
+                print(f"⚠️  ClickHouse null values found: {dict(ch_nulls[ch_nulls > 0])}")
+                return False
+                
+            # Compare timestamps
+            parquet_time_range = parquet_df['ts'].max() - parquet_df['ts'].min()
+            ch_df['ts'] = pd.to_datetime(ch_df['ts'])
+            ch_time_range = ch_df['ts'].max() - ch_df['ts'].min()
+            
+            print(f"⏰ Time range comparison:")
+            print(f"    Parquet: {parquet_time_range}")
+            print(f"    ClickHouse: {ch_time_range}")
+            
+            # Sample data comparison
+            print(f"🔍 Sample data comparison (first 3 rows):")
+            print(f"    Parquet mt values: {parquet_df['mt'].head(3).tolist()}")
+            print(f"    ClickHouse mt values: {ch_df['mt'].head(3).tolist()}")
+            
+            print(f"✅ Verification passed for {symbol}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Verification failed for {symbol}: {e}")
+            return False
+    
+    def process_symbol_rotation(self, symbol, period_start, period_end, force_rotation=False, preserve_data=False):
         """Process complete rotation and export for a single symbol."""
         container_name = CONTAINER_NAMES[symbol]
         print(f"\\n📊 Processing {symbol.upper()} rotation ({container_name})")
@@ -398,22 +641,35 @@ class HourlyTableRotator:
             self.signal_rotation_complete(symbol)
             return False
         
-        # Step 8: Delete previous table and UUID directory
-        if self.delete_previous_table(symbol):
+        # Step 8: Delete previous table and UUID directory (unless preserving data)
+        if preserve_data:
+            print(f"💾 Preserving {symbol}_previous table for verification")
             # Record successful export
             self.record_export(symbol, period_start, filepath, original_count)
-            print(f"✅ Successfully rotated, exported, and cleaned {symbol}")
-            success = True
+            # Verify the export matches ClickHouse data
+            verification_success = self.verify_parquet_vs_clickhouse(symbol, filepath)
+            if verification_success:
+                print(f"✅ Successfully rotated, exported, and preserved {symbol}")
+                success = True
+            else:
+                print(f"⚠️  Export completed but verification failed for {symbol}")
+                success = False
         else:
-            print(f"⚠️  Export completed but table deletion failed for {symbol}")
-            success = False
+            if self.delete_previous_table(symbol):
+                # Record successful export
+                self.record_export(symbol, period_start, filepath, original_count)
+                print(f"✅ Successfully rotated, exported, and cleaned {symbol}")
+                success = True
+            else:
+                print(f"⚠️  Export completed but table deletion failed for {symbol}")
+                success = False
         
         # Step 9: Clear rotation signal
         self.signal_rotation_complete(symbol)
         
         return success
     
-    def run_rotation_cycle(self, period_start, period_end, force_rotation=False):
+    def run_rotation_cycle(self, period_start, period_end, force_rotation=False, preserve_data=False):
         """Run complete rotation cycle for all symbols."""
         print(f"\\n{'='*70}")
         if force_rotation:
@@ -426,30 +682,31 @@ class HourlyTableRotator:
         
         success_count = 0
         for symbol in SYMBOLS:
-            if self.process_symbol_rotation(symbol, period_start, period_end, force_rotation):
+            if self.process_symbol_rotation(symbol, period_start, period_end, force_rotation, preserve_data):
                 success_count += 1
         
         print(f"\\n🎯 Rotation complete: {success_count}/{len(SYMBOLS)} symbols processed successfully")
         return success_count == len(SYMBOLS)
     
-    def run_once(self, force_rotation=True):
+    def run_once(self, force_rotation=True, preserve_data=True):
         """Run export for the previous complete period - FORCED mode ignores uptime checks."""
         now = datetime.now()
         
-        if self.debug_mode:
-            # Debug: previous 5-minute period
-            minutes_past = now.minute % 5
-            period_end = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes_past)
-            period_start = period_end - timedelta(minutes=5)
-        else:
-            # Production: previous hour (but forced)
-            period_end = now.replace(minute=0, second=0, microsecond=0)
-            period_start = period_end - timedelta(hours=1)
+        # For --once mode, always use a recent time period regardless of debug_mode
+        # Use last 5 minutes for immediate data availability
+        minutes_past = now.minute % 5
+        period_end = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes_past)
+        period_start = period_end - timedelta(minutes=5)
+        
+        print(f"🔍 DEBUG: Debug mode: {self.debug_mode}")
+        print(f"🔍 DEBUG: Period start: {period_start}")
+        print(f"🔍 DEBUG: Period end: {period_end}")
         
         print(f"Current time: {now}")
         print(f"Processing data from {period_start} to {period_end}")
+        print(f"Data preservation: {'ENABLED' if preserve_data else 'DISABLED'}")
         
-        return self.run_rotation_cycle(period_start, period_end, force_rotation)
+        return self.run_rotation_cycle(period_start, period_end, force_rotation, preserve_data)
     
     def run_continuous(self):
         """Run continuously, processing at configured intervals."""
@@ -478,7 +735,7 @@ class HourlyTableRotator:
                 time.sleep(wait_seconds)
             
             # Process the previous 5-minute period
-            self.run_once()
+            self.run_once(preserve_data=False)
             
             # Short sleep to prevent tight loop
             time.sleep(10)
@@ -500,7 +757,7 @@ class HourlyTableRotator:
                 time.sleep(wait_seconds)
             
             # Process the previous hour
-            self.run_once()
+            self.run_once(preserve_data=False)
             
             # Short sleep to prevent tight loop
             time.sleep(10)

@@ -120,3 +120,29 @@ dmypy.json
 # Test outputs
 test-results/
 test-outputs/
+
+# Debug and temporary files
+debug_*.py
+*_debug.parquet
+/tmp/
+*.debug
+*.trace
+
+# Export files (keep directory structure but ignore actual exports)
+exports/*.parquet
+exports/*.csv
+exports/*.json
+!exports/.gitkeep
+
+# Rotation flags and temporary files
+/tmp/*_rotate
+rotation_*.tmp
+
+# Performance logs
+performance_*.log
+stats_*.log
+
+# Backup and recovery files
+clickhouse-backup.tar.gz
+exports-backup.tar.gz
+recovery_*.sql
