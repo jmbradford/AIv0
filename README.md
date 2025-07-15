@@ -10,6 +10,9 @@ Deploy a complete multi-symbol cryptocurrency data pipeline on any Linux machine
 # 1. Environment setup (creates venv, installs dependencies, validates files)
 ./setup
 
+# Alternative for Ubuntu 24.04+ (bypasses pip3 requirement)
+./setup_ubuntu24
+
 # 2. Deploy complete system (ClickHouse + 3 client containers with IP separation)
 docker-compose up -d
 ```
@@ -342,6 +345,9 @@ docker-compose down
 # Restart specific client
 docker-compose restart btc-client
 
+# Fix export permissions (if needed)
+./fix_permissions
+
 # View logs for troubleshooting
 docker-compose logs btc-client | grep -A 5 -B 5 "error\|Error\|ERROR"
 ```
@@ -376,6 +382,20 @@ docker-compose up -d
 
 # Check container resource usage
 docker stats mexc-btc-client mexc-eth-client mexc-sol-client
+```
+
+### Export Permission Issues
+```bash
+# If exports fail with "Permission denied" errors
+./fix_permissions
+
+# Or manually fix permissions
+sudo chown -R 1000:1000 exports/
+chmod 755 exports/
+docker-compose restart exporter
+
+# Test manual export
+docker exec mexc-exporter python3 hourly_exporter.py --once
 ```
 
 ### Database Connection Issues

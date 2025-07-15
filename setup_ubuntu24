@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# MEXC Multi-Symbol Proxy Deployment - Complete Setup Script
-# Usage: ./setup.sh
+# MEXC Multi-Symbol Proxy Deployment - Ubuntu 24.04+ Compatible Setup
+# Usage: ./setup_ubuntu24
 # Requires: Docker, Docker Compose, Linux
 
 set -e  # Exit on any error
 
-echo "🚀 MEXC Multi-Symbol Cryptocurrency Pipeline Setup"
-echo "=================================================="
+echo "🚀 MEXC Multi-Symbol Cryptocurrency Pipeline Setup (Ubuntu 24.04+ Compatible)"
+echo "============================================================================="
 echo ""
 
 # Colors for output
@@ -70,51 +70,61 @@ fi
 
 print_status "Docker and Docker Compose are available"
 
-# Check Python
+# Check Python (but skip pip3 requirement for Ubuntu 24.04+)
 if ! command -v python3 &> /dev/null; then
     print_error "Python 3 is not installed. Please install Python 3.8+"
     exit 1
 fi
 
-# Check pip
-if ! command -v pip3 &> /dev/null; then
-    print_error "pip3 is not installed. Please install python3-pip"
-    exit 1
+print_status "Python 3 is available"
+print_warning "Skipping pip3 check for Ubuntu 24.04+ compatibility (Docker handles dependencies)"
+
+# Update package lists and install required packages
+echo ""
+echo "📦 Updating package lists and installing dependencies..."
+
+# Update apt package lists
+if sudo apt update >/dev/null 2>&1; then
+    print_status "Package lists updated"
+else
+    print_warning "Could not update package lists, continuing anyway"
 fi
 
-print_status "Python 3 and pip3 are available"
+# Install required packages for Ubuntu 24.04+
+if sudo apt install -y python3-venv python3-dev build-essential 2>/dev/null; then
+    print_status "Virtual environment packages installed"
+else
+    print_warning "Could not install venv packages, but Docker will handle all dependencies"
+fi
 
-# Create Python virtual environment
+# Create basic virtual environment if possible, otherwise skip
 echo ""
-echo "🐍 Setting up Python virtual environment..."
+echo "🐍 Setting up minimal Python environment..."
 
 if [ -d "venv" ]; then
     print_warning "Virtual environment already exists, removing old one"
     rm -rf venv
 fi
 
-python3 -m venv venv
-print_status "Virtual environment created"
-
-# Activate virtual environment
-source venv/bin/activate
-print_status "Virtual environment activated"
-
-# Upgrade pip
-pip install --upgrade pip
-print_status "pip upgraded"
-
-# Install Python dependencies
-echo ""
-echo "📦 Installing Python dependencies..."
-
-if [ ! -f "requirements.txt" ]; then
-    print_error "requirements.txt not found in current directory"
-    exit 1
+# Try to create venv, but don't fail if it doesn't work
+if python3 -m venv venv 2>/dev/null; then
+    print_status "Virtual environment created"
+    
+    # Try to activate and install basics
+    if source venv/bin/activate 2>/dev/null; then
+        print_status "Virtual environment activated"
+        
+        # Try to install requirements if possible
+        if [ -f "requirements.txt" ] && pip install -r requirements.txt &>/dev/null; then
+            print_status "Python dependencies installed in virtual environment"
+        else
+            print_warning "Could not install requirements in venv, but Docker will handle all dependencies"
+        fi
+    fi
+else
+    print_warning "Virtual environment creation failed (Ubuntu 24.04+ externally managed Python)"
+    print_status "Proceeding with Docker-only setup (all dependencies handled in containers)"
 fi
-
-pip install -r requirements.txt
-print_status "Python dependencies installed"
 
 # No .env file needed for proxy-based setup
 echo ""
@@ -192,18 +202,17 @@ sudo chown -R 1000:1000 exports/ 2>/dev/null || chown -R 1000:1000 exports/ 2>/d
     print_warning "Could not set exports directory ownership, you may need to run: sudo chown -R 1000:1000 exports/"
 }
 chmod 755 exports/
-print_status "Exports directory created with proper permissions"
+print_status "Exports directory created with proper permissions (1000:1000)"
 
 # Create deployment summary
 echo ""
 echo "📊 Setup Summary"
 echo "================"
-echo "✅ Virtual environment: $(pwd)/venv"
-echo "✅ Python dependencies: Installed"
-echo "✅ Configuration files: Validated"
-echo "✅ Docker images: Pre-downloaded"
-echo "✅ Exports directory: Created with proper permissions (1000:1000)"
-echo "✅ Project structure: Complete"
+print_status "Project validated and ready for deployment"
+print_status "All dependencies handled by Docker containers"
+print_status "Configuration files validated"
+print_status "Docker images pre-downloaded"
+print_status "Exports directory prepared"
 echo ""
 
 # Final instructions
@@ -218,11 +227,12 @@ echo "   docker-compose logs -f"
 echo ""
 echo "3. Verify data collection (each container uses different IP via Tor proxy):"
 echo "   ./verify"
-echo "   # OR manually: source venv/bin/activate && CLICKHOUSE_HOST=localhost python3 verify_data.py"
 echo ""
 
-print_status "Setup completed successfully!"
+print_status "Setup completed successfully for Ubuntu 24.04+!"
 print_status "Run 'docker-compose up -d' to start deployment"
 
 echo ""
 echo "📖 For troubleshooting, see README.md"
+echo ""
+print_warning "Note: This setup bypasses pip3 requirements and relies on Docker for all dependencies"

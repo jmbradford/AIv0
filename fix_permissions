@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# Fix Permissions Script for MEXC Pipeline
+# Usage: ./fix_permissions
+# Fixes export directory permissions and restarts affected containers
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_status() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+echo "🔧 MEXC Pipeline Permission Fix"
+echo "==============================="
+echo ""
+
+# Check if we're in the right directory
+if [ ! -f "docker-compose.yml" ]; then
+    print_error "Please run this script from the project directory (where docker-compose.yml is located)"
+    exit 1
+fi
+
+# Create exports directory if it doesn't exist
+echo "📁 Creating exports directory..."
+mkdir -p exports
+
+# Fix ownership
+echo "🔐 Fixing exports directory ownership..."
+if sudo chown -R 1000:1000 exports/ 2>/dev/null; then
+    print_status "Exports directory ownership set to 1000:1000"
+elif chown -R 1000:1000 exports/ 2>/dev/null; then
+    print_status "Exports directory ownership set to 1000:1000"
+else
+    print_error "Could not change ownership. Please run: sudo chown -R 1000:1000 exports/"
+    exit 1
+fi
+
+# Set permissions
+chmod 755 exports/
+print_status "Exports directory permissions set to 755"
+
+# Check if containers are running
+if docker-compose ps | grep -q "Up"; then
+    echo ""
+    echo "🔄 Restarting exporter container to apply changes..."
+    
+    if docker-compose restart exporter >/dev/null 2>&1; then
+        print_status "Exporter container restarted"
+    else
+        print_warning "Could not restart exporter container, try: docker-compose restart exporter"
+    fi
+else
+    print_warning "Containers not running. Start with: docker-compose up -d"
+fi
+
+echo ""
+echo "✅ Permission fix completed!"
+echo ""
+echo "🧪 Test the export with:"
+echo "   docker exec mexc-exporter python3 hourly_exporter.py --once"
+echo ""
