@@ -153,7 +153,7 @@ services:
     environment:
       - CONTAINER_TYPE=exporter
       - CLICKHOUSE_HOST=clickhouse
-      - EXPORT_DEBUG_MODE=true  # Set to 'false' for production hourly mode
+      - EXPORT_DEBUG_MODE=false  # Set to 'false' for production hourly mode
     volumes:
       - ./exports:/exports  # Mount local exports directory
     depends_on:
