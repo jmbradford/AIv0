@@ -135,13 +135,13 @@ Automated Hourly Exports:
 ./setup
 
 # Start all services and containers
-docker-compose up -d
+docker compose up -d
 
 # Stop all services
-docker-compose down
+docker compose down
 
 # Stop all and wipe collected data
-docker-compose down --remove-orphans --volumes
+docker compose down --remove-orphans --volumes
 
 # IP separation verification of all 3 client containers
 python3 ./verif-ip.py
@@ -183,7 +183,7 @@ Provided:
 
 This command:
 ```bash
-git clone https://github.com/jmbradford/AIv0 pipe && cd pipe && ./setup && source venv/bin/activate && docker-compose up -d && sleep 60 && python3 ./verif-ip.py && python3 ./verif-ch.py && docker exec exporter python3 exporter.py --once && python3 ./verif-parq.py
+git clone https://github.com/jmbradford/AIv0 pipe && cd pipe && ./setup && source venv/bin/activate && docker compose up -d && sleep 60 && python3 ./verif-ip.py && python3 ./verif-ch.py && docker exec exporter python3 exporter.py --once && python3 ./verif-parq.py
 ```
 
 Should:

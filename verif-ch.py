@@ -298,7 +298,7 @@ def verify_data():
     except Exception as e:
         print(f"❌ Error during verification: {e}")
         if "Connection refused" in str(e):
-            print("💡 Hint: Is ClickHouse container running? Try: docker-compose up -d")
+            print("💡 Hint: Is ClickHouse container running? Try: docker compose up -d")
         elif "doesn't exist" in str(e):
             print("💡 Hint: Tables missing? Try: python setup_database.py")
         sys.exit(1)

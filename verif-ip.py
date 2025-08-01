@@ -33,11 +33,11 @@ def check_container_status() -> List[str]:
     print("📋 Checking container status...")
     
     # Get running containers
-    success, output = run_docker_command("docker-compose ps -q client-btc client-eth client-sol")
+    success, output = run_docker_command("docker compose ps -q client-btc client-eth client-sol")
     
     if not success or not output:
         print("❌ No client containers are running. Start deployment first:")
-        print("   docker-compose up -d")
+        print("   docker compose up -d")
         sys.exit(1)
     
     # Get container names that are actually running
@@ -126,9 +126,9 @@ def analyze_ip_separation(container_ips: Dict[str, str]) -> None:
         print("❌ No container IPs could be verified")
         print("")
         print("🔧 Troubleshooting:")
-        print("  - Check if containers are running: docker-compose ps")
-        print("  - Check Tor proxy status: docker-compose logs client-btc | grep -i tor")
-        print("  - Restart containers: docker-compose restart")
+        print("  - Check if containers are running: docker compose ps")
+        print("  - Check Tor proxy status: docker compose logs client-btc | grep -i tor")
+        print("  - Restart containers: docker compose restart")
         sys.exit(1)
     
     # Display all detected IPs

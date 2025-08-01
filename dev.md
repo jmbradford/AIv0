@@ -55,7 +55,7 @@
 ### Quick Start Commands
 ```bash
 # Full system test
-docker-compose up -d && sleep 30 && python3 verif-ip.py && python3 verif-ch.py && docker exec exporter python3 exporter.py --once && python3 verif-parq.py
+docker compose up -d && sleep 30 && python3 verif-ip.py && python3 verif-ch.py && docker exec exporter python3 exporter.py --once && python3 verif-parq.py
 
 # Container health check
 docker ps --format "table {{.Names}}\t{{.Status}}"

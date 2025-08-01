@@ -189,11 +189,18 @@ fi
 echo ""
 echo "🐳 Validating Docker Compose configuration..."
 
-if docker-compose config >/dev/null 2>&1; then
+# Try docker-compose first, then docker compose
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE_CMD="docker-compose"
+else
+    DOCKER_COMPOSE_CMD="docker compose"
+fi
+
+if $DOCKER_COMPOSE_CMD config >/dev/null 2>&1; then
     print_status "Docker Compose configuration is valid"
 else
     print_error "Docker Compose configuration has errors"
-    docker-compose config
+    $DOCKER_COMPOSE_CMD config
     exit 1
 fi
 
@@ -234,10 +241,10 @@ echo "🎯 Next Steps"
 echo "============="
 echo ""
 echo "1. Start the complete multi-symbol proxy deployment:"
-echo "   docker-compose up -d"
+echo "   docker compose up -d"
 echo ""
 echo "2. Monitor the deployment:"
-echo "   docker-compose logs -f"
+echo "   docker compose logs -f"
 echo ""
 echo "3. Verify data collection (each container uses different IP via Tor proxy):"
 echo "   ./verify"
@@ -245,7 +252,7 @@ echo "   # OR manually: source venv/bin/activate && CLICKHOUSE_HOST=localhost py
 echo ""
 
 print_status "Setup completed successfully!"
-print_status "Run 'docker-compose up -d' to start deployment"
+print_status "Run 'docker compose up -d' to start deployment"
 
 echo ""
 echo "📖 For troubleshooting, see README.md"
