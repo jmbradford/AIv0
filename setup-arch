@@ -54,6 +54,7 @@ fi
 if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
     print_error "Docker Compose is not installed. Please install Docker Compose first:"
     echo "  sudo pacman -S docker-compose"
+    echo "  # OR: sudo pacman -S docker (includes compose plugin)"
     exit 1
 fi
 
@@ -177,11 +178,18 @@ fi
 echo ""
 echo "🐳 Validating Docker Compose configuration..."
 
-if docker-compose config >/dev/null 2>&1; then
+# Try docker-compose first, then docker compose
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE_CMD="docker-compose"
+else
+    DOCKER_COMPOSE_CMD="docker compose"
+fi
+
+if $DOCKER_COMPOSE_CMD config >/dev/null 2>&1; then
     print_status "Docker Compose configuration is valid"
 else
     print_error "Docker Compose configuration has errors"
-    docker-compose config
+    $DOCKER_COMPOSE_CMD config
     exit 1
 fi
 
