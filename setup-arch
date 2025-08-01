@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# MEXC Multi-Symbol Proxy Deployment - Complete Setup Script
-# Usage: ./setup
-# Requires: Docker, Docker Compose, Ubuntu/Debian Linux
-# Compatible: Ubuntu 18.04+, 20.04, 22.04, 24.04+ (handles externally managed Python)
+# MEXC Multi-Symbol Proxy Deployment - Arch Linux Setup Script
+# Usage: ./setup-arch
+# Requires: Docker, Docker Compose, Arch Linux
+# Compatible: Arch Linux with pacman package manager
 
 set -e  # Exit on any error
 
-echo "🚀 MEXC Multi-Symbol Cryptocurrency Pipeline Setup"
-echo "=================================================="
+echo "🚀 MEXC Multi-Symbol Cryptocurrency Pipeline Setup (Arch Linux)"
+echo "================================================================"
 echo ""
 
 # Colors for output
@@ -42,8 +42,9 @@ echo "🔍 Checking prerequisites..."
 # Check Docker
 if ! command -v docker &> /dev/null; then
     print_error "Docker is not installed. Please install Docker first:"
-    echo "  curl -fsSL https://get.docker.com -o get-docker.sh"
-    echo "  sudo sh get-docker.sh"
+    echo "  sudo pacman -S docker"
+    echo "  sudo systemctl enable docker"
+    echo "  sudo systemctl start docker"
     echo "  sudo usermod -aG docker $USER"
     echo "  newgrp docker"
     exit 1
@@ -51,7 +52,8 @@ fi
 
 # Check Docker Compose
 if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    print_error "Docker Compose is not installed. Please install Docker Compose first"
+    print_error "Docker Compose is not installed. Please install Docker Compose first:"
+    echo "  sudo pacman -S docker-compose"
     exit 1
 fi
 
@@ -77,33 +79,19 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Update package lists and install required packages
+# Update package database and install required packages
 echo ""
-echo "📦 Updating package lists and installing dependencies..."
+echo "📦 Updating package database and installing dependencies..."
 
-# Update apt package lists
-echo "Updating package lists..."
-sudo apt update
-print_status "Package lists updated"
+# Update pacman package database
+echo "Updating package database..."
+sudo pacman -Sy
+print_status "Package database updated"
 
 # Install required packages
 echo "Installing required packages..."
-sudo apt install -y python3-venv python3-dev build-essential python3-setuptools
+sudo pacman -S --needed python base-devel python-setuptools python-pip
 print_status "Required packages installed successfully"
-
-# Install pip (with Ubuntu 24.04+ compatibility)
-echo "Installing pip..."
-if sudo apt install -y python3-pip 2>/dev/null; then
-    print_status "pip3 installed via apt"
-elif sudo apt install -y python3-pip-whl 2>/dev/null; then
-    print_status "pip3 (wheel version) installed via apt"
-else
-    # Install pip manually for Ubuntu 24.04+ externally managed environments
-    echo "Installing pip manually for Ubuntu 24.04+ compatibility..."
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3 - --user --break-system-packages
-    export PATH="$HOME/.local/bin:$PATH"
-    print_status "pip3 installed manually"
-fi
 
 print_status "Python 3 and all dependencies are available"
 
@@ -222,7 +210,7 @@ echo "📊 Setup Summary"
 echo "================"
 echo "✅ Virtual environment: $(pwd)/venv"
 echo "✅ Python dependencies: Installed"
-echo "✅ Required packages: Installed (with Ubuntu 24.04+ compatibility)"
+echo "✅ Required packages: Installed (Arch Linux with pacman)"
 echo "✅ Configuration files: Validated"
 echo "✅ Docker images: Pre-downloaded"
 echo "✅ Exports directory: Created with proper permissions (1000:1000)"
